@@ -29,7 +29,6 @@ let firebaseConfig = {
   appId: "1:337136106838:web:a5a2d3f837f404f4426af7"
 };
 
-// (AI 캔버스 미리보기 환경을 위한 자동 설정 처리 - 로컬에서는 무시됩니다)
 if (typeof __firebase_config !== 'undefined') {
   firebaseConfig = JSON.parse(__firebase_config);
 }
@@ -42,9 +41,9 @@ const googleProvider = new GoogleAuthProvider();
 // ============================================================================
 
 const STATUSES = {
-  'todo': { label: '진행 예정 (To Do)', color: 'bg-slate-100', borderColor: 'border-slate-200', icon: Clock },
-  'in-progress': { label: '진행 중 (In Progress)', color: 'bg-blue-50', borderColor: 'border-blue-200', icon: Clock },
-  'done': { label: '완료 (Done)', color: 'bg-green-50', borderColor: 'border-green-200', icon: CheckCircle2 }
+  'todo': { label: '진행 예정', color: 'bg-slate-100', borderColor: 'border-slate-200', icon: Clock },
+  'in-progress': { label: '진행 중', color: 'bg-blue-50', borderColor: 'border-blue-200', icon: Clock },
+  'done': { label: '완료됨', color: 'bg-green-50', borderColor: 'border-green-200', icon: CheckCircle2 }
 };
 
 const PROJECT_COLORS = {
@@ -215,13 +214,12 @@ export default function App() {
   const closeAlert = () => setCustomAlert({ isOpen: false, title: '', message: '', onConfirm: null, isConfirm: false, isWide: false });
 
   // ==========================================================================
-  // 🔥 Firebase 연동 로직 (Auth & 실시간 데이터 구독)
+  // 🔥 Firebase 연동 로직
   // ==========================================================================
   const getPath = (colName) => ['artifacts', app_id_context, 'public', 'data', colName];
 
   useEffect(() => {
     const initAuth = async () => {
-      // 미리보기 캔버스 환경에서는 토큰이 있다면 우선 적용
       if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
         await signInWithCustomToken(auth, __initial_auth_token);
       }
@@ -372,10 +370,35 @@ export default function App() {
   };
 
   const polishDescriptionAI = async () => {
-    if (!taskFormData.description.trim()) return showAlert('정보 부족', '다듬을 내용을 먼저 "상세 설명"에 조금이라도 입력해주세요.');
+    if (!taskFormData.description?.trim()) return showAlert('정보 부족', '다듬을 내용을 먼저 "상세 설명"에 조금이라도 입력해주세요.');
     const prompt = `다음은 업무의 초안 메모입니다. 이 내용을 바탕으로 더 전문적이고 명확한 형태(예: 배경, 목표, 주요 작업 등으로 나누어진 개조식)의 업무 설명으로 다듬어주세요:\n\n"${taskFormData.description}"`;
     const result = await callGeminiAPI(prompt);
     if (result) setTaskFormData(prev => ({ ...prev, description: result }));
+  };
+
+  const generateSubtasksAI = async () => {
+    if (!taskFormData.title) return showAlert('정보 부족', '업무명을 먼저 입력해주세요.');
+    const prompt = `당신은 효율적인 프로젝트 매니저입니다. 다음 업무를 수행하기 위한 구체적이고 실행 가능한 하위 작업(Subtask)을 3~5개 추천해주세요. 업무명: "${taskFormData.title}", 설명: "${taskFormData.description || '없음'}". 답변은 순수하게 하위 작업 목록만 "-" 기호로 시작해서 작성해주세요.`;
+    const result = await callGeminiAPI(prompt);
+    if (result) {
+      const newTasks = result.split('\n').filter(line => line.trim().startsWith('-')).map(line => ({
+        id: Math.random().toString(), title: line.replace(/^- /, '').trim(), completed: false
+      }));
+      setTaskFormData(prev => ({ ...prev, subtasks: [...(prev.subtasks || []), ...newTasks] }));
+    }
+  };
+
+  const askAiTroubleshoot = async (task) => {
+    const prompt = `당신은 시니어 개발자 및 팀 리더입니다. 팀원이 다음 업무에서 이슈를 겪고 있습니다. 업무: "${task.title}", 이슈내용: "${task.issueNote}". 이 이슈를 해결하기 위한 조언, 원인 파악 방법, 또는 체크리스트를 3~4줄로 요약해서 친절하게 제안해주세요.`;
+    const result = await callGeminiAPI(prompt);
+    if (result) showAlert('💡 AI 조언', result);
+  };
+
+  const generateGreetingAI = async (member, type) => {
+    const typeText = type === 'birthday' ? '생일' : '진급';
+    const prompt = `당신은 따뜻하고 센스있는 팀 리더입니다. 팀원인 ${member.name} ${member.rank}(직무: ${member.role})의 ${typeText}을 축하하는 사내 메신저용 메시지를 작성해주세요. 너무 길지 않게 이모지를 섞어서 친근하게 작성해주세요.`;
+    const result = await callGeminiAPI(prompt);
+    if (result) showAlert(`🎉 ${typeText} 축하 메시지 초안`, result, true);
   };
 
   // --- 데이터 백업 및 복원 ---
@@ -427,9 +450,12 @@ export default function App() {
 
   // --- 워크스페이스 로직 ---
   const handleOpenWsModal = (ws = null) => {
-    if (ws) {
-      setEditingWs(ws);
-      setWsFormData({ name: ws.name, description: ws.description || '' });
+    const isEvent = ws && ws.nativeEvent;
+    const validWs = isEvent ? null : ws;
+
+    if (validWs) {
+      setEditingWs(validWs);
+      setWsFormData({ name: validWs.name, description: validWs.description || '' });
     } else {
       setEditingWs(null);
       setWsFormData({ name: '', description: '' });
@@ -506,7 +532,10 @@ export default function App() {
 
   // --- 프로젝트 로직 ---
   const handleOpenProjectModal = (project = null) => {
-    if (project) setProjectFormData({ ...project });
+    const isEvent = project && project.nativeEvent;
+    const validProject = isEvent ? null : project;
+
+    if (validProject) setProjectFormData({ ...validProject });
     else setProjectFormData({ id: '', name: '', color: 'indigo' });
     setIsProjectModalOpen(true);
   };
@@ -531,15 +560,25 @@ export default function App() {
 
   // --- 업무 로직 ---
   const handleOpenTaskModal = (task = null) => {
-    if (task) {
-      setEditingTask(task);
-      setTaskFormData({ ...task, subtasks: task.subtasks || [] });
+    const isEvent = task && (task.nativeEvent || task.target);
+    const validTask = isEvent ? null : task;
+
+    if (validTask && validTask.id) {
+      setEditingTask(validTask);
+      setTaskFormData({ ...validTask, subtasks: validTask.subtasks || [] });
     } else {
       setEditingTask(null);
       setTaskFormData({ 
         title: '', 
         projectId: selectedProjectFilter !== 'all' ? selectedProjectFilter : (projects.length > 0 ? projects[0].id : ''), 
-        assignee: '', description: '', status: activeTab || 'todo', hasIssue: false, issueNote: '', subtasks: [], startDate: '', targetDate: '' 
+        assignee: '', 
+        description: '', 
+        status: activeTab || 'todo', 
+        hasIssue: false, 
+        issueNote: '', 
+        subtasks: [], 
+        startDate: '', 
+        targetDate: '' 
       });
     }
     setNewSubtaskTitle('');
@@ -612,9 +651,12 @@ export default function App() {
 
   // --- 팀원/조직 로직 ---
   const handleOpenMemberModal = (member = null) => {
-    if (member) {
-      setEditingMember(member);
-      setMemberFormData({ ...member });
+    const isEvent = member && member.nativeEvent;
+    const validMember = isEvent ? null : member;
+
+    if (validMember) {
+      setEditingMember(validMember);
+      setMemberFormData({ ...validMember });
     } else {
       setEditingMember(null);
       setMemberFormData({ name: '', rank: '사원', departmentId: departments.length > 0 ? departments[0].id : '', role: '', joinDate: '', promotionDate: '', birthday: '', email: '', phone: '' });
@@ -638,7 +680,8 @@ export default function App() {
   };
 
   const handleOpenOrgModal = (parentId = null) => {
-    setOrgFormData({ name: '', parentId });
+    const isEvent = parentId && parentId.nativeEvent;
+    setOrgFormData({ name: '', parentId: isEvent ? null : parentId });
     setIsOrgModalOpen(true);
   };
 
@@ -1477,17 +1520,17 @@ export default function App() {
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col">
             <div className="p-5 border-b flex justify-between items-center"><h3 className="font-bold text-lg">{editingTask ? '업무 수정' : '새 업무 등록'}</h3><button onClick={() => setIsTaskModalOpen(false)}><X className="w-5 h-5 text-slate-400"/></button></div>
             <div className="p-5 overflow-y-auto space-y-5">
-              <div><label className="block text-sm font-bold mb-1">업무명 *</label><input type="text" value={taskFormData.title} onChange={e => setTaskFormData({...taskFormData, title: e.target.value})} className="w-full px-3 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-indigo-500" /></div>
+              <div><label className="block text-sm font-bold mb-1">업무명 *</label><input type="text" value={taskFormData.title || ''} onChange={e => setTaskFormData({...taskFormData, title: e.target.value})} className="w-full px-3 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-indigo-500" /></div>
               <div className="grid grid-cols-2 gap-4">
-                <div className="col-span-2"><label className="block text-sm font-bold mb-1 text-indigo-700">소속 프로젝트 *</label><select value={taskFormData.projectId} onChange={e => setTaskFormData({...taskFormData, projectId: e.target.value})} className="w-full px-3 py-2 border border-indigo-200 rounded-lg bg-white outline-none"><option value="" disabled>프로젝트 선택</option>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
-                <div><label className="block text-sm font-bold mb-1">담당자</label><select value={taskFormData.assignee} onChange={e => setTaskFormData({...taskFormData, assignee: e.target.value})} className="w-full px-3 py-2 border rounded-lg bg-white"><option value="">선택 안 함</option>{members.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}</select></div>
-                <div><label className="block text-sm font-bold mb-1">상태</label><select value={taskFormData.status} onChange={e => setTaskFormData({...taskFormData, status: e.target.value})} className="w-full px-3 py-2 border rounded-lg bg-white"><option value="todo">진행 예정</option><option value="in-progress">진행 중</option><option value="done">완료됨</option></select></div>
-                <div><label className="block text-sm font-bold mb-1 text-indigo-700">시작일 *</label><input type="date" value={taskFormData.startDate} onChange={e => setTaskFormData({...taskFormData, startDate: e.target.value})} className="w-full px-3 py-2 border rounded-lg" required /></div>
-                <div><label className="block text-sm font-bold mb-1 text-indigo-700">목표일 *</label><input type="date" value={taskFormData.targetDate} onChange={e => setTaskFormData({...taskFormData, targetDate: e.target.value})} className="w-full px-3 py-2 border rounded-lg" required /></div>
+                <div className="col-span-2"><label className="block text-sm font-bold mb-1 text-indigo-700">소속 프로젝트 *</label><select value={taskFormData.projectId || ''} onChange={e => setTaskFormData({...taskFormData, projectId: e.target.value})} className="w-full px-3 py-2 border border-indigo-200 rounded-lg bg-white outline-none"><option value="" disabled>프로젝트 선택</option>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
+                <div><label className="block text-sm font-bold mb-1">담당자</label><select value={taskFormData.assignee || ''} onChange={e => setTaskFormData({...taskFormData, assignee: e.target.value})} className="w-full px-3 py-2 border rounded-lg bg-white"><option value="">선택 안 함</option>{members.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}</select></div>
+                <div><label className="block text-sm font-bold mb-1">상태</label><select value={taskFormData.status || 'todo'} onChange={e => setTaskFormData({...taskFormData, status: e.target.value})} className="w-full px-3 py-2 border rounded-lg bg-white"><option value="todo">진행 예정</option><option value="in-progress">진행 중</option><option value="done">완료됨</option></select></div>
+                <div><label className="block text-sm font-bold mb-1 text-indigo-700">시작일 *</label><input type="date" value={taskFormData.startDate || ''} onChange={e => setTaskFormData({...taskFormData, startDate: e.target.value})} className="w-full px-3 py-2 border rounded-lg" required /></div>
+                <div><label className="block text-sm font-bold mb-1 text-indigo-700">목표일 *</label><input type="date" value={taskFormData.targetDate || ''} onChange={e => setTaskFormData({...taskFormData, targetDate: e.target.value})} className="w-full px-3 py-2 border rounded-lg" required /></div>
               </div>
               <div>
                 <div className="flex justify-between items-center mb-1"><label className="block text-sm font-bold">상세 설명</label><button type="button" onClick={polishDescriptionAI} className="text-xs bg-indigo-50 text-indigo-600 px-2 py-1 rounded border border-indigo-100 font-bold flex items-center gap-1 hover:bg-indigo-100"><Sparkles className="w-3 h-3"/> AI 문장 다듬기</button></div>
-                <textarea value={taskFormData.description} onChange={e => setTaskFormData({...taskFormData, description: e.target.value})} className="w-full px-3 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-indigo-500" rows="3"/>
+                <textarea value={taskFormData.description || ''} onChange={e => setTaskFormData({...taskFormData, description: e.target.value})} className="w-full px-3 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-indigo-500" rows="3"/>
               </div>
               <div className="border-t pt-5">
                 <div className="flex justify-between items-center mb-3">
@@ -1495,10 +1538,10 @@ export default function App() {
                   <button type="button" onClick={generateSubtasksAI} className="text-xs bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 hover:bg-indigo-100"><Sparkles className="w-3 h-3"/> AI 업무 추천</button>
                 </div>
                 <div className="flex gap-2 mb-3">
-                  <input type="text" value={newSubtaskTitle} onChange={e => setNewSubtaskTitle(e.target.value)} onKeyDown={e => {if(e.key === 'Enter') {e.preventDefault(); if(!newSubtaskTitle.trim())return; setTaskFormData({...taskFormData, subtasks: [...taskFormData.subtasks, {id: Date.now().toString(), title: newSubtaskTitle, completed: false}]}); setNewSubtaskTitle('');}}} className="flex-1 px-3 py-2 border rounded-lg text-sm" placeholder="작업 입력 후 Enter"/>
+                  <input type="text" value={newSubtaskTitle || ''} onChange={e => setNewSubtaskTitle(e.target.value)} onKeyDown={e => {if(e.key === 'Enter') {e.preventDefault(); if(!newSubtaskTitle.trim())return; setTaskFormData({...taskFormData, subtasks: [...(taskFormData.subtasks || []), {id: Date.now().toString(), title: newSubtaskTitle, completed: false}]}); setNewSubtaskTitle('');}}} className="flex-1 px-3 py-2 border rounded-lg text-sm" placeholder="작업 입력 후 Enter"/>
                 </div>
                 <ul className="space-y-2">
-                  {taskFormData.subtasks.map((sub, idx) => (
+                  {taskFormData.subtasks?.map((sub, idx) => (
                     <li key={sub.id} draggable onDragStart={(e) => handleDragStart(e, idx)} onDragEnter={(e) => handleDragEnter(e, idx)} onDragOver={(e)=>e.preventDefault()} onDragEnd={handleDragEnd} className="flex items-center gap-3 p-2 border rounded-lg bg-slate-50">
                       <GripVertical className="w-4 h-4 text-slate-400 cursor-grab"/>
                       <input type="checkbox" checked={sub.completed} onChange={() => setTaskFormData({...taskFormData, subtasks: taskFormData.subtasks.map(s => s.id === sub.id ? {...s, completed: !s.completed} : s)})} className="w-4 h-4 rounded text-indigo-600"/>
@@ -1520,13 +1563,13 @@ export default function App() {
             <div className="p-5 border-b flex justify-between items-center"><h3 className="font-bold text-lg">{editingMember ? '수정' : '등록'}</h3><button onClick={() => setIsMemberModalOpen(false)}><X className="w-5 h-5 text-slate-400"/></button></div>
             <div className="p-5 space-y-4">
               <div className="grid grid-cols-2 gap-4">
-                <div><label className="block text-sm font-bold mb-1">이름 *</label><input type="text" value={memberFormData.name} onChange={e => setMemberFormData({...memberFormData, name: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
-                <div><label className="block text-sm font-bold mb-1">직급</label><select value={memberFormData.rank} onChange={e => setMemberFormData({...memberFormData, rank: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm">{RANKS.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
-                <div className="col-span-2"><label className="block text-sm font-bold mb-1">소속 부서</label><select value={memberFormData.departmentId} onChange={e => setMemberFormData({...memberFormData, departmentId: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm bg-white"><option value="">-- 선택 안 함 --</option>{departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
-                <div className="col-span-2"><label className="block text-sm font-bold mb-1">직무</label><input type="text" value={memberFormData.role} onChange={e => setMemberFormData({...memberFormData, role: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
-                <div><label className="block text-sm font-bold mb-1">입사일</label><input type="date" value={memberFormData.joinDate} onChange={e => setMemberFormData({...memberFormData, joinDate: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
-                <div><label className="block text-sm font-bold mb-1">최근 진급일</label><input type="date" value={memberFormData.promotionDate} onChange={e => setMemberFormData({...memberFormData, promotionDate: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
-                <div className="col-span-2"><label className="block text-sm font-bold mb-1">생일</label><input type="date" value={memberFormData.birthday} onChange={e => setMemberFormData({...memberFormData, birthday: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
+                <div><label className="block text-sm font-bold mb-1">이름 *</label><input type="text" value={memberFormData.name || ''} onChange={e => setMemberFormData({...memberFormData, name: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
+                <div><label className="block text-sm font-bold mb-1">직급</label><select value={memberFormData.rank || ''} onChange={e => setMemberFormData({...memberFormData, rank: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm">{RANKS.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
+                <div className="col-span-2"><label className="block text-sm font-bold mb-1">소속 부서</label><select value={memberFormData.departmentId || ''} onChange={e => setMemberFormData({...memberFormData, departmentId: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm bg-white"><option value="">-- 선택 안 함 --</option>{departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
+                <div className="col-span-2"><label className="block text-sm font-bold mb-1">직무</label><input type="text" value={memberFormData.role || ''} onChange={e => setMemberFormData({...memberFormData, role: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
+                <div><label className="block text-sm font-bold mb-1">입사일</label><input type="date" value={memberFormData.joinDate || ''} onChange={e => setMemberFormData({...memberFormData, joinDate: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
+                <div><label className="block text-sm font-bold mb-1">최근 진급일</label><input type="date" value={memberFormData.promotionDate || ''} onChange={e => setMemberFormData({...memberFormData, promotionDate: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
+                <div className="col-span-2"><label className="block text-sm font-bold mb-1">생일</label><input type="date" value={memberFormData.birthday || ''} onChange={e => setMemberFormData({...memberFormData, birthday: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
               </div>
             </div>
             <div className="p-4 border-t bg-slate-50 flex justify-between rounded-b-2xl">{editingMember ? <button onClick={() => deleteMember(editingMember.id)} className="text-red-500 font-bold px-2 text-sm">삭제</button> : <div></div>}<div className="flex gap-2"><button onClick={() => setIsMemberModalOpen(false)} className="px-4 py-2 border rounded-lg text-sm font-bold bg-white">취소</button><button onClick={handleMemberSubmit} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-bold">저장</button></div></div>
