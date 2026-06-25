@@ -1,0 +1,15 @@
+{
+  "projects": {
+    "default": "teammanage-eb8bd"
+  },
+  "targets": {
+    "teammanage-eb8bd": {
+      "hosting": {
+        "teammanage": [
+          "teammanage"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}
