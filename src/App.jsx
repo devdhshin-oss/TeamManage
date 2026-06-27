@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { 
   Plus, AlertCircle, CheckCircle2, Clock, User, Search, X, MessageSquareWarning,
   ListTodo, Trash2, CheckSquare, Square, GripVertical, LayoutDashboard, ListFilter,
@@ -10,7 +10,7 @@ import {
 
 // --- Firebase SDK Imports ---
 import { initializeApp } from 'firebase/app';
-import { getFirestore, collection, onSnapshot, doc, setDoc, deleteDoc } from 'firebase/firestore';
+import { getFirestore, collection, getDocs, getDoc, doc, setDoc, deleteDoc, query, where } from 'firebase/firestore';
 import { 
   getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken,
   createUserWithEmailAndPassword, signInWithEmailAndPassword,
@@ -35,10 +35,22 @@ if (typeof __firebase_config !== 'undefined') {
 const app_id_context = typeof __app_id !== 'undefined' ? __app_id : 'local-teamspace-app';
 
 const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
+const db = getFirestore(app, 'default');
 const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
+const LAST_AUTH_EMAIL_KEY = 'teamspace_last_auth_email';
 // ============================================================================
+
+const getLastAuthEmail = () => {
+  if (typeof localStorage === 'undefined') return '';
+  return localStorage.getItem(LAST_AUTH_EMAIL_KEY) || '';
+};
+
+const saveLastAuthEmail = (email) => {
+  if (typeof localStorage === 'undefined') return;
+  const trimmedEmail = email?.trim();
+  if (trimmedEmail) localStorage.setItem(LAST_AUTH_EMAIL_KEY, trimmedEmail);
+};
 
 const STATUSES = {
   'todo': { label: '진행 예정', color: 'bg-slate-100', borderColor: 'border-slate-200', icon: Clock },
@@ -55,6 +67,115 @@ const PROJECT_COLORS = {
 };
 
 const RANKS = ['사원', '대리', '과장', '차장', '부장', '임원'];
+const OWNER_ONLY_MENUS = ['members', 'org', 'workspaces'];
+const ASSIGNEE_COLORS = [
+  { bar: 'bg-indigo-500', chip: 'bg-indigo-100 text-indigo-700 border-indigo-200' },
+  { bar: 'bg-emerald-500', chip: 'bg-emerald-100 text-emerald-700 border-emerald-200' },
+  { bar: 'bg-rose-500', chip: 'bg-rose-100 text-rose-700 border-rose-200' },
+  { bar: 'bg-amber-500', chip: 'bg-amber-100 text-amber-700 border-amber-200' },
+  { bar: 'bg-sky-500', chip: 'bg-sky-100 text-sky-700 border-sky-200' },
+  { bar: 'bg-violet-500', chip: 'bg-violet-100 text-violet-700 border-violet-200' },
+  { bar: 'bg-teal-500', chip: 'bg-teal-100 text-teal-700 border-teal-200' },
+  { bar: 'bg-fuchsia-500', chip: 'bg-fuchsia-100 text-fuchsia-700 border-fuchsia-200' },
+  { bar: 'bg-cyan-500', chip: 'bg-cyan-100 text-cyan-700 border-cyan-200' },
+  { bar: 'bg-lime-600', chip: 'bg-lime-100 text-lime-700 border-lime-200' },
+];
+
+const normalizeEmail = (email) => (email || '').trim().toLowerCase();
+const isEmailLike = (email) => normalizeEmail(email).includes('@');
+
+const getWorkspaceEmails = (workspace) => {
+  const emails = [workspace?.ownerEmail, ...(workspace?.members || [])]
+    .map(normalizeEmail)
+    .filter(isEmailLike)
+    .filter(Boolean);
+  return [...new Set(emails)];
+};
+
+const getUserAccessKeys = (currentUser) => {
+  if (!currentUser) return [];
+  const email = normalizeEmail(currentUser.email);
+  return [
+    currentUser.uid ? `uid:${currentUser.uid}` : '',
+    isEmailLike(email) ? `email:${email}` : ''
+  ].filter(Boolean);
+};
+
+const getWorkspaceAccessKeys = (workspace) => {
+  const keys = [
+    workspace?.ownerId ? `uid:${workspace.ownerId}` : '',
+    ...getWorkspaceEmails(workspace).map(email => `email:${email}`)
+  ]
+    .filter(Boolean);
+  return [...new Set(keys)];
+};
+
+const normalizeWorkspaceData = (workspace) => {
+  if (!workspace) return workspace;
+  return {
+    ...workspace,
+    ownerEmail: isEmailLike(workspace.ownerEmail) ? normalizeEmail(workspace.ownerEmail) : (workspace.ownerEmail || ''),
+    members: getWorkspaceEmails(workspace),
+    accessKeys: getWorkspaceAccessKeys(workspace)
+  };
+};
+
+const canAccessWorkspace = (workspace, currentUser) => {
+  if (!currentUser) return false;
+  if (workspace.ownerId === currentUser.uid) return true;
+  const userAccessKeys = getUserAccessKeys(currentUser);
+  if (userAccessKeys.some(key => workspace.accessKeys?.includes(key))) return true;
+  const userEmail = normalizeEmail(currentUser.email);
+  return Boolean(userEmail && getWorkspaceEmails(workspace).includes(userEmail));
+};
+
+const getPersonalWorkspaceName = (currentUser) => {
+  const emailName = normalizeEmail(currentUser?.email).split('@')[0];
+  const displayName = currentUser?.displayName?.trim();
+  return `${displayName || emailName || '나'}의 워크스페이스`;
+};
+
+const createOwnedWorkspaceData = (currentUser, workspaceId, overrides = {}) => {
+  const ownerEmail = normalizeEmail(currentUser?.email);
+  return normalizeWorkspaceData({
+    id: workspaceId,
+    name: getPersonalWorkspaceName(currentUser),
+    description: '개인 업무 관리를 위한 워크스페이스입니다.',
+    ownerId: currentUser.uid,
+    ownerEmail,
+    members: ownerEmail ? [ownerEmail] : [],
+    ...overrides
+  });
+};
+
+const mergeById = (...lists) => {
+  const merged = new Map();
+  lists.flat().filter(Boolean).forEach(item => merged.set(item.id, item));
+  return [...merged.values()];
+};
+
+const getWorkspaceAccessDocId = (workspaceId, email) => `${workspaceId}_${encodeURIComponent(normalizeEmail(email))}`;
+
+const createWorkspaceAccessData = (workspace, email) => ({
+  id: getWorkspaceAccessDocId(workspace.id, email),
+  workspaceId: workspace.id,
+  workspaceName: workspace.name || '',
+  email: normalizeEmail(email),
+  ownerId: workspace.ownerId || '',
+  createdAt: new Date().toISOString().split('T')[0]
+});
+
+const hashString = (value) => {
+  const text = value || '미지정';
+  let hash = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    hash = ((hash << 5) - hash) + text.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+};
+
+const getAssigneeColor = (assignee) => ASSIGNEE_COLORS[hashString(assignee) % ASSIGNEE_COLORS.length];
 
 // --- 헬퍼 함수 ---
 const calculateAge = (birthday) => {
@@ -73,7 +194,13 @@ const calculateNextPromotionDate = (rank, joinDate, promotionDate) => {
   const reqYears = yearsRequired[rank];
   if (!reqYears) return null;
 
-  const baseDate = new Date(promotionDate || joinDate);
+  const join = new Date(joinDate);
+  const firstAprilAfterJoin = new Date(join.getFullYear(), 3, 1);
+  const baseDate = promotionDate
+    ? new Date(promotionDate)
+    : join <= firstAprilAfterJoin
+      ? firstAprilAfterJoin
+      : new Date(join.getFullYear() + 1, 3, 1);
   let targetYear = baseDate.getFullYear() + reqYears;
   let targetDate = new Date(targetYear, 3, 1);
 
@@ -90,6 +217,12 @@ const calculateNextPromotionDate = (rank, joinDate, promotionDate) => {
   const mm = String(targetDate.getMonth() + 1).padStart(2, '0');
   const dd = String(targetDate.getDate()).padStart(2, '0');
   return `${yyyy}-${mm}-${dd}`;
+};
+
+const formatDateLabel = (dateStr) => {
+  if (!dateStr) return '계산 불가';
+  const [year, month, day] = dateStr.split('-');
+  return `${year}.${month}.${day}`;
 };
 
 const calculateDDay = (targetDate, status) => {
@@ -112,7 +245,7 @@ export default function App() {
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [user, setUser] = useState(null);
   const [authMode, setAuthMode] = useState('login'); // 'login' | 'signup'
-  const [authForm, setAuthForm] = useState({ email: '', password: '' });
+  const [authForm, setAuthForm] = useState(() => ({ email: getLastAuthEmail(), password: '' }));
 
   const [currentMenu, setCurrentMenu] = useState('tasks');
   
@@ -122,17 +255,18 @@ export default function App() {
   const [allDepartments, setAllDepartments] = useState([]);
   const [allWorkspaces, setAllWorkspaces] = useState([]);
   const [allProjects, setAllProjects] = useState([]);
+  const [workspaceStats, setWorkspaceStats] = useState({});
   
   // 현재 선택된 워크스페이스
-  const [activeWorkspaceIdState, setActiveWorkspaceIdState] = useState(() => localStorage.getItem('teamspace_active_ws') || null);
+  const [activeWorkspaceIdState, setActiveWorkspaceIdState] = useState(null);
   
   const setActiveWorkspaceId = (id) => {
     setActiveWorkspaceIdState(id);
     if (id) {
-      localStorage.setItem('teamspace_active_ws', id);
       setCurrentMenu('tasks'); 
-    } else {
-      localStorage.removeItem('teamspace_active_ws');
+      setSelectedProjectFilter('all');
+      setSearchQuery('');
+      setActiveTab('in-progress');
     }
   };
   const activeWorkspaceId = activeWorkspaceIdState;
@@ -140,19 +274,29 @@ export default function App() {
   // 내가 접근 권한이 있는 워크스페이스만 필터링
   const myWorkspaces = useMemo(() => {
     if (!user) return [];
-    return allWorkspaces.filter(ws => 
-      ws.id === 'default' || 
-      ws.ownerId === user.uid || 
-      (user.email && ws.members?.includes(user.email)) ||
-      ws.members?.includes(user.uid)
-    );
+    return allWorkspaces.filter(ws => canAccessWorkspace(ws, user));
   }, [allWorkspaces, user]);
+  const currentWorkspace = useMemo(() => allWorkspaces.find(w => w.id === activeWorkspaceId) || null, [allWorkspaces, activeWorkspaceId]);
+  const isCurrentWorkspaceOwner = Boolean(user && currentWorkspace?.ownerId === user.uid);
+
+  useEffect(() => {
+    if (!user || myWorkspaces.length === 0 || !activeWorkspaceId) return;
+    if (!myWorkspaces.some(ws => ws.id === activeWorkspaceId)) {
+      setActiveWorkspaceId(null);
+    }
+  }, [activeWorkspaceId, myWorkspaces, user]);
+
+  useEffect(() => {
+    if (activeWorkspaceId && OWNER_ONLY_MENUS.includes(currentMenu) && !isCurrentWorkspaceOwner) {
+      setCurrentMenu('tasks');
+    }
+  }, [activeWorkspaceId, currentMenu, isCurrentWorkspaceOwner]);
 
   // 현재 워크스페이스 기준으로 필터링된 데이터
-  const tasks = useMemo(() => allTasks.filter(t => (t.workspaceId || 'default') === activeWorkspaceId), [allTasks, activeWorkspaceId]);
-  const members = useMemo(() => allMembers.filter(m => (m.workspaceId || 'default') === activeWorkspaceId), [allMembers, activeWorkspaceId]);
-  const departments = useMemo(() => allDepartments.filter(d => (d.workspaceId || 'default') === activeWorkspaceId), [allDepartments, activeWorkspaceId]);
-  const projects = useMemo(() => allProjects.filter(p => (p.workspaceId || 'default') === activeWorkspaceId), [allProjects, activeWorkspaceId]);
+  const tasks = useMemo(() => allTasks.filter(t => t.workspaceId === activeWorkspaceId), [allTasks, activeWorkspaceId]);
+  const members = useMemo(() => allMembers.filter(m => m.workspaceId === activeWorkspaceId), [allMembers, activeWorkspaceId]);
+  const departments = useMemo(() => allDepartments.filter(d => d.workspaceId === activeWorkspaceId), [allDepartments, activeWorkspaceId]);
+  const projects = useMemo(() => allProjects.filter(p => p.workspaceId === activeWorkspaceId), [allProjects, activeWorkspaceId]);
 
   // UI 상태
   const [searchQuery, setSearchQuery] = useState('');
@@ -217,6 +361,67 @@ export default function App() {
   // 🔥 Firebase 연동 로직
   // ==========================================================================
   const getPath = (colName) => ['artifacts', app_id_context, 'public', 'data', colName];
+  const docsFromSnapshot = (snap, colName = null) => snap.docs.map(d => {
+    const data = { id: d.id, ...d.data() };
+    return colName === 'workspaces' ? normalizeWorkspaceData(data) : data;
+  });
+  const isActiveWorkspaceAccessible = () => Boolean(user && activeWorkspaceId && myWorkspaces.some(ws => ws.id === activeWorkspaceId));
+
+  const replaceById = (items, item) => {
+    const exists = items.some(existing => existing.id === item.id);
+    return exists ? items.map(existing => existing.id === item.id ? item : existing) : [...items, item];
+  };
+
+  const removeById = (items, id) => items.filter(item => item.id !== id);
+
+  const syncLocalCollection = (colName, id, data, action = 'upsert') => {
+    const update = action === 'delete'
+      ? (items) => removeById(items, id)
+      : (items) => replaceById(items, { ...data, id });
+
+    if (colName === 'tasks') setAllTasks(update);
+    if (colName === 'members') setAllMembers(update);
+    if (colName === 'departments') setAllDepartments(update);
+    if (colName === 'projects') setAllProjects(update);
+    if (colName === 'workspaces') {
+      const normalizedWorkspace = data ? normalizeWorkspaceData({ ...data, id }) : null;
+      setAllWorkspaces(prev => action === 'delete'
+        ? removeById(prev, id)
+        : replaceById(prev, normalizedWorkspace)
+      );
+    }
+  };
+
+  const loadWorkspaceData = useCallback(async () => {
+    if (!isActiveWorkspaceAccessible()) {
+      setAllTasks([]);
+      setAllMembers([]);
+      setAllDepartments([]);
+      setAllProjects([]);
+      return;
+    }
+
+    const scopedQuery = (colName) => query(collection(db, ...getPath(colName)), where('workspaceId', '==', activeWorkspaceId));
+    try {
+      const collectionsToLoad = new Set(['tasks', 'projects']);
+      if (currentMenu === 'calendar') collectionsToLoad.add('members');
+      if (currentMenu === 'members' || currentMenu === 'org') {
+        collectionsToLoad.add('members');
+        collectionsToLoad.add('departments');
+      }
+
+      const loads = await Promise.all([...collectionsToLoad].map(async (colName) => [colName, docsFromSnapshot(await getDocs(scopedQuery(colName)))]));
+      loads.forEach(([colName, docs]) => {
+        if (colName === 'tasks') setAllTasks(docs);
+        if (colName === 'members') setAllMembers(docs);
+        if (colName === 'departments') setAllDepartments(docs);
+        if (colName === 'projects') setAllProjects(docs);
+      });
+    } catch (err) {
+      console.error(err);
+      showAlert('데이터 조회 실패', '워크스페이스 데이터를 불러오지 못했습니다.');
+    }
+  }, [user, activeWorkspaceId, myWorkspaces, currentMenu]);
 
   useEffect(() => {
     const initAuth = async () => {
@@ -227,6 +432,7 @@ export default function App() {
     initAuth();
     
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      if (currentUser?.email) saveLastAuthEmail(currentUser.email);
       setUser(currentUser);
       setIsAuthLoading(false);
     });
@@ -234,52 +440,164 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!user) return;
-    
-    const tasksRef = collection(db, ...getPath('tasks'));
-    const unsubTasks = onSnapshot(tasksRef, (snap) => setAllTasks(snap.docs.map(d => ({ id: d.id, ...d.data() }))), (err) => console.error(err));
+    if (!user) {
+      setAllWorkspaces([]);
+      return;
+    }
 
-    const membersRef = collection(db, ...getPath('members'));
-    const unsubMembers = onSnapshot(membersRef, (snap) => setAllMembers(snap.docs.map(d => ({ id: d.id, ...d.data() }))), (err) => console.error(err));
+    let cancelled = false;
+    const loadWorkspaces = async () => {
+      try {
+        const wsRef = collection(db, ...getPath('workspaces'));
+        const userEmail = normalizeEmail(user.email);
+        const userAccessKeys = getUserAccessKeys(user);
+        const workspaceResults = [];
+        const queryErrors = [];
 
-    const deptsRef = collection(db, ...getPath('departments'));
-    const unsubDepts = onSnapshot(deptsRef, (snap) => setAllDepartments(snap.docs.map(d => ({ id: d.id, ...d.data() }))), (err) => console.error(err));
-    
-    const projectsRef = collection(db, ...getPath('projects'));
-    const unsubProjects = onSnapshot(projectsRef, (snap) => setAllProjects(snap.docs.map(d => ({ id: d.id, ...d.data() }))), (err) => console.error(err));
+        const runWorkspaceQuery = async (workspaceQuery) => {
+          try {
+            workspaceResults.push(...docsFromSnapshot(await getDocs(workspaceQuery), 'workspaces'));
+          } catch (error) {
+            queryErrors.push(error);
+          }
+        };
 
-    const wsRef = collection(db, ...getPath('workspaces'));
-    const unsubWs = onSnapshot(wsRef, (snap) => {
-      if (!snap.empty) {
-        setAllWorkspaces(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-      } else {
-        setAllWorkspaces([{ id: 'default', name: '기본 워크스페이스', ownerId: 'system' }]);
+        await runWorkspaceQuery(query(wsRef, where('ownerId', '==', user.uid)));
+        if (userEmail) {
+          try {
+            const accessSnap = await getDocs(query(collection(db, ...getPath('workspaceAccess')), where('email', '==', userEmail)));
+            const accessWorkspaceIds = [...new Set(accessSnap.docs.map(d => d.data().workspaceId).filter(Boolean))];
+            const accessWorkspaces = await Promise.all(accessWorkspaceIds.map(async (workspaceId) => {
+              const workspaceDoc = await getDoc(doc(db, ...getPath('workspaces'), workspaceId));
+              return workspaceDoc.exists() ? normalizeWorkspaceData({ id: workspaceDoc.id, ...workspaceDoc.data() }) : null;
+            }));
+            workspaceResults.push(...accessWorkspaces.filter(Boolean));
+          } catch (error) {
+            queryErrors.push(error);
+          }
+        }
+        for (const accessKey of userAccessKeys) {
+          await runWorkspaceQuery(query(wsRef, where('accessKeys', 'array-contains', accessKey)));
+        }
+        if (userEmail) {
+          await runWorkspaceQuery(query(wsRef, where('members', 'array-contains', userEmail)));
+        }
+
+        if (workspaceResults.length === 0 && queryErrors.length > 0) {
+          throw queryErrors[0];
+        }
+
+        const mergedWorkspaces = mergeById(workspaceResults);
+
+        if (mergedWorkspaces.length === 0 && user.uid) {
+          const personalWsId = `personal_${user.uid}`;
+          const personalWorkspace = createOwnedWorkspaceData(user, personalWsId);
+          await setDoc(doc(db, ...getPath('workspaces'), personalWsId), personalWorkspace);
+          mergedWorkspaces.push(personalWorkspace);
+        }
+
+        if (!cancelled) {
+          setAllWorkspaces(mergedWorkspaces);
+        }
+      } catch (err) {
+        console.error(err);
+        if (!cancelled) showAlert('워크스페이스 조회 실패', '접근 가능한 워크스페이스를 불러오지 못했습니다.');
       }
-    }, (err) => console.error(err));
+    };
 
-    return () => { unsubTasks(); unsubMembers(); unsubDepts(); unsubProjects(); unsubWs(); };
-  }, [user]);
+    loadWorkspaces();
+    return () => { cancelled = true; };
+  }, [user, activeWorkspaceId]);
+
+  useEffect(() => {
+    loadWorkspaceData();
+  }, [loadWorkspaceData]);
+
+  const syncWorkspaceAccessDocs = async (workspace) => {
+    const normalizedWorkspace = normalizeWorkspaceData(workspace);
+    await Promise.all(getWorkspaceEmails(normalizedWorkspace).map(email => {
+      const accessData = createWorkspaceAccessData(normalizedWorkspace, email);
+      return setDoc(doc(db, ...getPath('workspaceAccess'), accessData.id), accessData);
+    }));
+  };
+
+  useEffect(() => {
+    if (!user || myWorkspaces.length === 0) return;
+    const ownedWorkspaces = myWorkspaces.filter(ws => ws.ownerId === user.uid);
+    ownedWorkspaces.forEach(ws => {
+      syncWorkspaceAccessDocs(ws).catch(console.error);
+    });
+  }, [user, myWorkspaces]);
+
+  useEffect(() => {
+    if (!user || myWorkspaces.length === 0) {
+      setWorkspaceStats({});
+      return;
+    }
+
+    let cancelled = false;
+    const loadWorkspaceStats = async () => {
+      const nextStats = {};
+      await Promise.all(myWorkspaces.map(async (ws) => {
+        try {
+          const [tasksSnap, membersSnap] = await Promise.all([
+            getDocs(query(collection(db, ...getPath('tasks')), where('workspaceId', '==', ws.id))),
+            getDocs(query(collection(db, ...getPath('members')), where('workspaceId', '==', ws.id)))
+          ]);
+          nextStats[ws.id] = {
+            tasks: tasksSnap.size,
+            members: membersSnap.size
+          };
+        } catch (error) {
+          console.error(error);
+          nextStats[ws.id] = {
+            tasks: allTasks.filter(t => t.workspaceId === ws.id).length,
+            members: allMembers.filter(m => m.workspaceId === ws.id).length
+          };
+        }
+      }));
+
+      if (!cancelled) setWorkspaceStats(nextStats);
+    };
+
+    loadWorkspaceStats();
+    return () => { cancelled = true; };
+  }, [user, myWorkspaces, allTasks, allMembers]);
 
   const saveToFirebase = async (colName, id, data) => {
     if (!user) return;
-    try { await setDoc(doc(db, ...getPath(colName), id), data); } catch (e) { console.error(e); showAlert("저장 실패", "클라우드 저장에 실패했습니다."); }
+    const dataToSave = colName === 'workspaces' ? normalizeWorkspaceData({ ...data, id }) : data;
+    try {
+      await setDoc(doc(db, ...getPath(colName), id), dataToSave);
+      if (colName === 'workspaces') {
+        await syncWorkspaceAccessDocs(dataToSave);
+      }
+      syncLocalCollection(colName, id, dataToSave);
+    } catch (e) { console.error(e); showAlert("저장 실패", "클라우드 저장에 실패했습니다."); }
   };
 
   const deleteFromFirebase = async (colName, id) => {
     if (!user) return;
-    try { await deleteDoc(doc(db, ...getPath(colName), id)); } catch (e) { console.error(e); showAlert("삭제 실패", "클라우드 데이터 삭제에 실패했습니다."); }
+    try {
+      await deleteDoc(doc(db, ...getPath(colName), id));
+      syncLocalCollection(colName, id, null, 'delete');
+    } catch (e) { console.error(e); showAlert("삭제 실패", "클라우드 데이터 삭제에 실패했습니다."); }
   };
 
   // --- Auth Functions ---
   const handleEmailAuth = async (e) => {
     e.preventDefault();
     setIsAuthLoading(true);
+    const email = authForm.email.trim();
     try {
       if (authMode === 'login') {
-        await signInWithEmailAndPassword(auth, authForm.email, authForm.password);
+        await signInWithEmailAndPassword(auth, email, authForm.password);
       } else {
-        await createUserWithEmailAndPassword(auth, authForm.email, authForm.password);
+        await createUserWithEmailAndPassword(auth, email, authForm.password);
       }
+      saveLastAuthEmail(email);
+      localStorage.removeItem('guest_mode');
+      setAuthForm({ email, password: '' });
     } catch (error) {
       let msg = "오류가 발생했습니다.";
       if (error.code === 'auth/invalid-credential') msg = "이메일 또는 비밀번호가 올바르지 않습니다.";
@@ -294,7 +612,12 @@ export default function App() {
   const handleGoogleAuth = async () => {
     setIsAuthLoading(true);
     try {
-      await signInWithPopup(auth, googleProvider);
+      const result = await signInWithPopup(auth, googleProvider);
+      if (result.user?.email) {
+        saveLastAuthEmail(result.user.email);
+        localStorage.removeItem('guest_mode');
+        setAuthForm({ email: result.user.email, password: '' });
+      }
     } catch (error) {
       if (error.code !== 'auth/popup-closed-by-user') {
         showAlert('구글 로그인 실패', error.message);
@@ -308,6 +631,7 @@ export default function App() {
     setIsAuthLoading(true);
     try {
       await signInAnonymously(auth);
+      setAuthForm(prev => ({ email: getLastAuthEmail() || prev.email, password: '' }));
     } catch (error) {
       showAlert('게스트 로그인 실패', error.message);
     } finally {
@@ -317,7 +641,12 @@ export default function App() {
 
   const handleLogout = async () => {
     showConfirm('로그아웃', '정말 로그아웃 하시겠습니까?', async () => {
+      const lastEmail = user?.email || authForm.email || getLastAuthEmail();
+      saveLastAuthEmail(lastEmail);
+      localStorage.removeItem('guest_mode');
       setActiveWorkspaceId(null);
+      setAuthMode('login');
+      setAuthForm({ email: lastEmail, password: '' });
       await signOut(auth);
     });
   };
@@ -429,7 +758,7 @@ export default function App() {
           showConfirm('데이터 업로드(복원)', '파일의 데이터를 클라우드 데이터베이스에 모두 업로드하시겠습니까?\n이 데이터는 즉시 덮어씌워지며 모두에게 공유됩니다.', async () => {
             setIsDataModalOpen(false);
             setIsAiLoading(true); 
-            for (const ws of parsedData.workspaces || [{ id: 'default', name: '기본 워크스페이스', ownerId: 'system' }]) await saveToFirebase('workspaces', ws.id, ws);
+            for (const ws of parsedData.workspaces || []) await saveToFirebase('workspaces', ws.id, ws);
             for (const p of parsedData.projects || []) await saveToFirebase('projects', p.id, p);
             for (const t of parsedData.tasks) await saveToFirebase('tasks', t.id, t);
             for (const m of parsedData.members) await saveToFirebase('members', m.id, m);
@@ -467,6 +796,7 @@ export default function App() {
     e.preventDefault();
     if (!wsFormData.name.trim()) return;
     const wsId = editingWs ? editingWs.id : `ws_${Date.now()}`;
+    const ownerEmail = normalizeEmail(user.email);
     const wsData = editingWs 
       ? { ...editingWs, name: wsFormData.name, description: wsFormData.description }
       : { 
@@ -474,8 +804,8 @@ export default function App() {
           name: wsFormData.name, 
           description: wsFormData.description,
           ownerId: user.uid, 
-          ownerEmail: user.email || 'Guest',
-          members: user.email ? [user.email] : [] 
+          ownerEmail,
+          members: ownerEmail ? [ownerEmail] : [] 
         };
         
     setIsWsModalOpen(false);
@@ -486,7 +816,6 @@ export default function App() {
   };
 
   const deleteWorkspace = (id) => {
-    if (id === 'default') return showAlert('삭제 불가', '기본 워크스페이스는 삭제할 수 없습니다.');
     const targetWs = allWorkspaces.find(w => w.id === id);
     if (targetWs.ownerId !== user.uid) return showAlert('권한 없음', '워크스페이스 소유자만 삭제할 수 있습니다.');
 
@@ -509,25 +838,33 @@ export default function App() {
     setIsInviteModalOpen(true);
   };
 
-  const handleInviteSubmit = async (e) => {
+  const handleInviteSubmit = async (e, workspace = inviteWs) => {
     e.preventDefault();
-    if (!inviteEmail.trim()) return;
-    if (inviteWs.members?.includes(inviteEmail)) return showAlert('중복', '이미 초대된 이메일입니다.');
+    if (!workspace) return;
+    const email = normalizeEmail(inviteEmail);
+    if (!email) return;
+    if (!email.includes('@')) return showAlert('입력 확인', '올바른 이메일 주소를 입력해주세요.');
+    if (getWorkspaceEmails(workspace).includes(email)) return showAlert('중복', '이미 초대된 이메일입니다.');
     
-    const updatedMembers = [...(inviteWs.members || []), inviteEmail.trim()];
-    await saveToFirebase('workspaces', inviteWs.id, { ...inviteWs, members: updatedMembers });
+    const updatedMembers = [...getWorkspaceEmails(workspace), email];
+    const updatedWorkspace = normalizeWorkspaceData({ ...workspace, members: updatedMembers });
+    await saveToFirebase('workspaces', workspace.id, updatedWorkspace);
     
-    setInviteWs({ ...inviteWs, members: updatedMembers });
+    setInviteWs(updatedWorkspace);
     setInviteEmail('');
-    showAlert('초대 완료', `${inviteEmail} 사용자를 성공적으로 초대했습니다.`);
+    showAlert('초대 완료', `${email} 사용자를 성공적으로 초대했습니다.`);
   };
 
-  const handleRemoveMember = async (emailToRemove) => {
-    if (emailToRemove === inviteWs.ownerEmail) return showAlert('불가', '소유자는 워크스페이스에서 제외할 수 없습니다.');
+  const handleRemoveMember = async (emailToRemove, workspace = inviteWs) => {
+    if (!workspace) return;
+    const targetEmail = normalizeEmail(emailToRemove);
+    if (targetEmail === normalizeEmail(workspace.ownerEmail)) return showAlert('불가', '소유자는 워크스페이스에서 제외할 수 없습니다.');
     
-    const updatedMembers = inviteWs.members.filter(email => email !== emailToRemove);
-    await saveToFirebase('workspaces', inviteWs.id, { ...inviteWs, members: updatedMembers });
-    setInviteWs({ ...inviteWs, members: updatedMembers });
+    const updatedMembers = getWorkspaceEmails(workspace).filter(email => email !== targetEmail);
+    const updatedWorkspace = normalizeWorkspaceData({ ...workspace, members: updatedMembers });
+    await saveToFirebase('workspaces', workspace.id, updatedWorkspace);
+    await deleteDoc(doc(db, ...getPath('workspaceAccess'), getWorkspaceAccessDocId(workspace.id, targetEmail)));
+    setInviteWs(updatedWorkspace);
   };
 
   // --- 프로젝트 로직 ---
@@ -570,7 +907,7 @@ export default function App() {
       setEditingTask(null);
       setTaskFormData({ 
         title: '', 
-        projectId: selectedProjectFilter !== 'all' ? selectedProjectFilter : (projects.length > 0 ? projects[0].id : ''), 
+        projectId: selectedProjectFilter !== 'all' ? selectedProjectFilter : '', 
         assignee: '', 
         description: '', 
         status: activeTab || 'todo', 
@@ -587,16 +924,19 @@ export default function App() {
 
   const handleTaskSubmit = async (e) => {
     e.preventDefault();
-    if (!taskFormData.projectId) return showAlert('필수 입력 누락', '프로젝트(폴더)를 선택해주세요.');
-    if (!taskFormData.startDate || !taskFormData.targetDate) return showAlert('필수 입력 누락', '업무의 시작일자와 완료 목표일자(기한)는 필수 입력 항목입니다.');
-    if (taskFormData.startDate > taskFormData.targetDate) return showAlert('날짜 오류', '시작일자가 완료 목표일자보다 늦을 수 없습니다.');
+    if (!taskFormData.title?.trim()) return showAlert('필수 입력 누락', '업무명을 입력해주세요.');
+    if (taskFormData.startDate && taskFormData.targetDate && taskFormData.startDate > taskFormData.targetDate) return showAlert('날짜 오류', '시작일자가 완료 목표일자보다 늦을 수 없습니다.');
 
     const dateStr = new Date().toISOString().split('T')[0];
     const taskId = editingTask ? editingTask.id : Date.now().toString();
-    const taskData = { ...taskFormData, id: taskId, updatedAt: dateStr, workspaceId: activeWorkspaceId };
+    const taskData = { ...taskFormData, title: taskFormData.title.trim(), id: taskId, updatedAt: dateStr, workspaceId: activeWorkspaceId };
     
     setIsTaskModalOpen(false);
     await saveToFirebase('tasks', taskId, taskData);
+    setCurrentMenu('tasks');
+    setActiveTab(taskData.status || 'todo');
+    setSearchQuery('');
+    setSelectedProjectFilter(taskData.projectId || 'all');
   };
 
   const deleteTask = (id) => {
@@ -651,6 +991,7 @@ export default function App() {
 
   // --- 팀원/조직 로직 ---
   const handleOpenMemberModal = (member = null) => {
+    if (!isCurrentWorkspaceOwner) return showAlert('권한 없음', '워크스페이스 소유자만 팀원을 관리할 수 있습니다.');
     const isEvent = member && member.nativeEvent;
     const validMember = isEvent ? null : member;
 
@@ -666,6 +1007,7 @@ export default function App() {
 
   const handleMemberSubmit = async (e) => {
     e.preventDefault();
+    if (!isCurrentWorkspaceOwner) return showAlert('권한 없음', '워크스페이스 소유자만 팀원을 관리할 수 있습니다.');
     const memberId = editingMember ? editingMember.id : `m_${Date.now()}`;
     const memberData = { ...memberFormData, id: memberId, workspaceId: activeWorkspaceId };
     setIsMemberModalOpen(false);
@@ -673,6 +1015,7 @@ export default function App() {
   };
 
   const deleteMember = (id) => {
+    if (!isCurrentWorkspaceOwner) return showAlert('권한 없음', '워크스페이스 소유자만 팀원을 관리할 수 있습니다.');
     showConfirm('팀원 삭제', '정말 이 팀원 정보를 삭제하시겠습니까?', async () => {
       setIsMemberModalOpen(false);
       await deleteFromFirebase('members', id);
@@ -680,6 +1023,7 @@ export default function App() {
   };
 
   const handleOpenOrgModal = (parentId = null) => {
+    if (!isCurrentWorkspaceOwner) return showAlert('권한 없음', '워크스페이스 소유자만 조직을 관리할 수 있습니다.');
     const isEvent = parentId && parentId.nativeEvent;
     setOrgFormData({ name: '', parentId: isEvent ? null : parentId });
     setIsOrgModalOpen(true);
@@ -687,6 +1031,7 @@ export default function App() {
 
   const handleOrgSubmit = async (e) => {
     e.preventDefault();
+    if (!isCurrentWorkspaceOwner) return showAlert('권한 없음', '워크스페이스 소유자만 조직을 관리할 수 있습니다.');
     if (!orgFormData.name.trim()) return;
     const deptId = `dept_${Date.now()}`;
     const deptData = { id: deptId, name: orgFormData.name, parentId: orgFormData.parentId, workspaceId: activeWorkspaceId };
@@ -695,6 +1040,7 @@ export default function App() {
   };
 
   const deleteDepartment = (deptId) => {
+    if (!isCurrentWorkspaceOwner) return showAlert('권한 없음', '워크스페이스 소유자만 조직을 관리할 수 있습니다.');
     if (departments.some(d => d.parentId === deptId)) return showAlert('삭제 불가', '하위 부서가 존재합니다. 하위 부서를 먼저 삭제한 후 다시 시도해주세요.');
     showConfirm('부서 삭제', '정말 이 부서를 삭제하시겠습니까?\n이 부서에 소속된 팀원들의 소속 정보가 사라질 수 있습니다.', async () => {
       await deleteFromFirebase('departments', deptId);
@@ -823,12 +1169,11 @@ export default function App() {
                     else if (isEnd) barClass = 'mr-1.5 -ml-[1px] rounded-r-md relative z-10'; 
                     else barClass = '-mx-[1px] rounded-none relative z-10'; 
 
-                    const projObj = projects.find(p => p.id === t.projectId) || {};
-                    const projColor = (PROJECT_COLORS[projObj.color] || PROJECT_COLORS['indigo']).bg.replace('100', '500'); 
+                    const assigneeColor = getAssigneeColor(t.assignee).bar;
                     const showTitle = isStart || dayOfWeek === 0 || dayNum === 1;
 
                     return (
-                      <div key={t.id} onClick={() => handleOpenTaskModal(t)} className={`h-5 text-[10px] text-white px-2 flex items-center cursor-pointer hover:brightness-110 ${t.status === 'done' ? 'bg-emerald-500' : projColor} ${barClass}`} title={`${t.title} (${t.assignee})`}>
+                      <div key={t.id} onClick={() => handleOpenTaskModal(t)} className={`h-5 text-[10px] text-white px-2 flex items-center cursor-pointer hover:brightness-110 ${t.status === 'done' ? 'opacity-70' : ''} ${assigneeColor} ${barClass}`} title={`${t.title} (${t.assignee || '미지정'})`}>
                         {showTitle ? <span className="font-semibold truncate leading-none">{t.title}</span> : <span className="invisible">.</span>}
                       </div>
                     );
@@ -896,19 +1241,41 @@ export default function App() {
     return (
       <div 
         key={task.id} draggable onDragStart={(e) => handleCardDragStart(e, task.id)} onDragEnd={handleCardDragEnd}
-        className={`bg-white border border-slate-200 p-4 rounded-xl shadow-sm hover:shadow-md transition-all flex flex-col h-full cursor-grab active:cursor-grabbing ${isDragging ? 'opacity-40 scale-95 ring-2 ring-indigo-500' : ''}`}
+        className={`group relative bg-white border border-slate-200 p-4 rounded-xl shadow-sm hover:shadow-md transition-all flex flex-col h-full cursor-grab active:cursor-grabbing ${isDragging ? 'opacity-40 scale-95 ring-2 ring-indigo-500' : ''}`}
       >
+        <div className="absolute top-3 right-3 z-10 flex gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+          <button
+            type="button"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={() => handleOpenTaskModal(task)}
+            className="p-1.5 rounded-lg bg-white/95 border border-slate-200 text-slate-400 shadow-sm hover:text-indigo-600 hover:border-indigo-200 hover:bg-indigo-50 transition-colors"
+            title="업무 수정"
+            aria-label="업무 수정"
+          >
+            <Edit2 className="w-4 h-4" />
+          </button>
+          <button
+            type="button"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={() => deleteTask(task.id)}
+            className="p-1.5 rounded-lg bg-white/95 border border-slate-200 text-slate-400 shadow-sm hover:text-red-600 hover:border-red-200 hover:bg-red-50 transition-colors"
+            title="업무 삭제"
+            aria-label="업무 삭제"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
+        </div>
         <div className="flex justify-between items-start mb-2.5">
           <div className={`text-[10px] px-2 py-0.5 rounded-full font-bold border flex items-center gap-1 ${pColor.bg} ${pColor.text} ${pColor.border}`}>
             <Tag className="w-2.5 h-2.5" /> {project.name}
           </div>
-          <div className="flex gap-1.5">
+          <div className="flex gap-1.5 items-center pr-16">
             {dDay && <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${dDay.color}`}>{dDay.label}</span>}
             {task.hasIssue && <span className="bg-red-50 text-red-600 text-[10px] px-1.5 py-0.5 rounded font-bold animate-pulse flex items-center"><MessageSquareWarning className="w-2.5 h-2.5 mr-0.5" /> 이슈</span>}
           </div>
         </div>
         
-        <h3 className="font-bold text-slate-800 mb-2 cursor-pointer hover:text-indigo-600 line-clamp-2" onClick={() => handleOpenTaskModal(task)}>{task.title}</h3>
+        <h3 className="font-bold text-slate-800 mb-2 line-clamp-2">{task.title}</h3>
         
         <div className="flex justify-between items-center mb-3">
           <span className="inline-flex items-center gap-1 text-slate-500 text-[11px] font-medium"><User className="w-3 h-3" /> {task.assignee || '미지정'}</span>
@@ -975,14 +1342,20 @@ export default function App() {
               <button onClick={() => setAuthMode('signup')} className={`flex-1 pb-2 font-bold text-sm transition-colors ${authMode === 'signup' ? 'text-indigo-600 border-b-2 border-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}>이메일로 가입</button>
             </div>
 
-            <form onSubmit={handleEmailAuth} className="space-y-4">
+            <form onSubmit={handleEmailAuth} className="space-y-4" autoComplete="off">
+              {/* 브라우저 강제 자동완성 방지용 가짜(Dummy) 인풋 */}
+              <div style={{ width: 0, height: 0, overflow: 'hidden', position: 'absolute' }}>
+                <input type="email" name="fake_email" tabIndex="-1" aria-hidden="true" />
+                <input type="password" name="fake_password" tabIndex="-1" aria-hidden="true" />
+              </div>
+
               <div>
                 <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">이메일</label>
-                <input type="email" required value={authForm.email} onChange={e => setAuthForm({...authForm, email: e.target.value})} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all" placeholder="name@company.com" />
+                <input type="email" required value={authForm.email} onChange={e => setAuthForm({...authForm, email: e.target.value})} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all" placeholder="name@company.com" autoComplete="off" />
               </div>
               <div>
                 <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">비밀번호</label>
-                <input type="password" required value={authForm.password} onChange={e => setAuthForm({...authForm, password: e.target.value})} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all" placeholder="••••••••" />
+                <input type="password" required value={authForm.password} onChange={e => setAuthForm({...authForm, password: e.target.value})} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all" placeholder="비밀번호를 입력하세요" autoComplete="new-password"/>
               </div>
               <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3.5 rounded-xl transition-colors shadow-md hover:shadow-lg mt-2 flex items-center justify-center gap-2">
                 {authMode === 'login' ? <><LogIn className="w-5 h-5"/> 로그인</> : <><UserPlus className="w-5 h-5"/> 회원가입</>}
@@ -1051,8 +1424,9 @@ export default function App() {
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5 w-full max-w-5xl">
           {myWorkspaces.map(ws => {
-            const wsTasksCount = allTasks.filter(t => (t.workspaceId || 'default') === ws.id).length;
-            const wsMembersCount = allMembers.filter(m => (m.workspaceId || 'default') === ws.id).length;
+            const stats = workspaceStats[ws.id];
+            const wsTasksCount = stats?.tasks ?? allTasks.filter(t => t.workspaceId === ws.id).length;
+            const wsMembersCount = stats?.members ?? allMembers.filter(m => m.workspaceId === ws.id).length;
             const isOwner = ws.ownerId === user.uid;
             
             return (
@@ -1068,7 +1442,7 @@ export default function App() {
                   {isOwner && (
                     <>
                       <button onClick={(e) => { e.stopPropagation(); handleOpenWsModal(ws); }} className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg"><Edit2 className="w-4 h-4"/></button>
-                      {ws.id !== 'default' && <button onClick={(e) => { e.stopPropagation(); deleteWorkspace(ws.id); }} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 className="w-4 h-4"/></button>}
+                      <button onClick={(e) => { e.stopPropagation(); deleteWorkspace(ws.id); }} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 className="w-4 h-4"/></button>
                     </>
                   )}
                 </div>
@@ -1168,8 +1542,8 @@ export default function App() {
               <h3 className="font-bold text-lg text-slate-800 mb-4 pb-2 border-b border-slate-100">{customAlert.title}</h3>
               <p className="text-slate-600 text-sm mb-6 whitespace-pre-wrap leading-relaxed">{customAlert.message}</p>
               <div className={`flex gap-3 ${customAlert.isWide ? 'justify-end' : 'justify-center'}`}>
-                {customAlert.isConfirm && <button onClick={closeAlert} className="px-5 py-2.5 bg-slate-100 text-slate-700 rounded-xl text-sm font-bold hover:bg-slate-200">취소</button>}
-                <button onClick={() => { if (customAlert.onConfirm) customAlert.onConfirm(); closeAlert(); }} className={`px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700 ${customAlert.isWide ? '' : 'w-full'}`}>{customAlert.isConfirm ? '확인' : '닫기'}</button>
+                <button onClick={() => { if (customAlert.onConfirm) customAlert.onConfirm(); closeAlert(); }} className={`px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700 ${customAlert.isConfirm ? 'flex-1' : customAlert.isWide ? '' : 'w-full'}`}>{customAlert.isConfirm ? '확인' : '닫기'}</button>
+                {customAlert.isConfirm && <button onClick={closeAlert} className="flex-1 px-5 py-2.5 bg-slate-100 text-slate-700 rounded-xl text-sm font-bold hover:bg-slate-200">취소</button>}
               </div>
             </div>
           </div>
@@ -1181,7 +1555,7 @@ export default function App() {
   // ==========================================
   // VIEW: 메인 대시보드 (선택된 워크스페이스 내부)
   // ==========================================
-  const currentWorkspaceName = allWorkspaces.find(w => w.id === activeWorkspaceId)?.name || '알 수 없음';
+  const currentWorkspaceName = currentWorkspace?.name || '알 수 없음';
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-800 flex flex-col">
@@ -1189,8 +1563,9 @@ export default function App() {
       <nav className="bg-white border-b border-slate-200 px-4 sm:px-6 py-3 sticky top-0 z-10 shadow-sm flex flex-wrap justify-between items-center gap-2">
         <div className="flex items-center gap-4">
           <div className="flex items-center gap-2">
-            <button onClick={() => setActiveWorkspaceId(null)} className="p-2 text-slate-400 hover:bg-slate-100 hover:text-indigo-600 rounded-lg transition-colors flex items-center gap-1.5" title="조직 변경하기">
+            <button onClick={() => setActiveWorkspaceId(null)} className="p-2 text-slate-400 hover:bg-slate-100 hover:text-indigo-600 rounded-lg transition-colors flex items-center gap-1.5" title="워크스페이스 선택">
               <Home className="w-5 h-5" />
+              <span className="hidden lg:inline text-xs font-bold">워크스페이스</span>
             </button>
             <div className="h-6 w-px bg-slate-200"></div>
             <div className="font-black text-lg text-slate-800 flex items-center gap-2 px-2">
@@ -1204,9 +1579,13 @@ export default function App() {
             <button onClick={() => setCurrentMenu('tasks')} className={`px-3 py-1.5 rounded-lg text-sm font-bold flex items-center gap-2 ${currentMenu === 'tasks' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-100'}`}><LayoutDashboard className="w-4 h-4" /> 업무 보드</button>
             <button onClick={() => setCurrentMenu('projects')} className={`px-3 py-1.5 rounded-lg text-sm font-bold flex items-center gap-2 ${currentMenu === 'projects' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-100'}`}><FolderKanban className="w-4 h-4" /> 프로젝트 관리</button>
             <button onClick={() => setCurrentMenu('calendar')} className={`px-3 py-1.5 rounded-lg text-sm font-bold flex items-center gap-2 ${currentMenu === 'calendar' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-100'}`}><CalendarDays className="w-4 h-4" /> 일정 캘린더</button>
-            <button onClick={() => setCurrentMenu('members')} className={`px-3 py-1.5 rounded-lg text-sm font-bold flex items-center gap-2 ${currentMenu === 'members' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-100'}`}><Users className="w-4 h-4" /> 팀원 관리</button>
-            <button onClick={() => setCurrentMenu('org')} className={`px-3 py-1.5 rounded-lg text-sm font-bold flex items-center gap-2 ${currentMenu === 'org' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-100'}`}><Building className="w-4 h-4" /> 조직 관리</button>
-            <button onClick={() => setCurrentMenu('workspaces')} className={`px-3 py-1.5 rounded-lg text-sm font-bold flex items-center gap-2 ${currentMenu === 'workspaces' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-100'}`}><Key className="w-4 h-4" /> 권한 설정</button>
+            {isCurrentWorkspaceOwner && (
+              <>
+                <button onClick={() => setCurrentMenu('members')} className={`px-3 py-1.5 rounded-lg text-sm font-bold flex items-center gap-2 ${currentMenu === 'members' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-100'}`}><Users className="w-4 h-4" /> 팀원 관리</button>
+                <button onClick={() => setCurrentMenu('org')} className={`px-3 py-1.5 rounded-lg text-sm font-bold flex items-center gap-2 ${currentMenu === 'org' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-100'}`}><Building className="w-4 h-4" /> 조직 관리</button>
+                <button onClick={() => setCurrentMenu('workspaces')} className={`px-3 py-1.5 rounded-lg text-sm font-bold flex items-center gap-2 ${currentMenu === 'workspaces' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-100'}`}><Key className="w-4 h-4" /> 권한 설정</button>
+              </>
+            )}
           </div>
         </div>
 
@@ -1216,9 +1595,9 @@ export default function App() {
               <option value="tasks">업무 보드</option>
               <option value="projects">프로젝트</option>
               <option value="calendar">캘린더</option>
-              <option value="members">팀원</option>
-              <option value="org">조직</option>
-              <option value="workspaces">권한 설정</option>
+              {isCurrentWorkspaceOwner && <option value="members">팀원</option>}
+              {isCurrentWorkspaceOwner && <option value="org">조직</option>}
+              {isCurrentWorkspaceOwner && <option value="workspaces">권한 설정</option>}
             </select>
           </div>
           <div className="relative">
@@ -1242,12 +1621,15 @@ export default function App() {
             )}
           </div>
           <button onClick={() => setIsKeyModalOpen(true)} className={`p-2 rounded-full hidden sm:block ${apiKey ? 'text-green-600 bg-green-50' : 'text-slate-400 bg-slate-100 hover:text-slate-600'}`} title="API 키 설정"><Key className="w-5 h-5" /></button>
+          <button onClick={handleLogout} className="p-2 text-slate-400 hover:bg-red-50 hover:text-red-600 rounded-full transition-colors" title="로그아웃">
+            <LogOut className="w-5 h-5" />
+          </button>
         </div>
       </nav>
 
       <main className="flex-1 p-4 sm:p-6 max-w-[1600px] mx-auto w-full">
         {/* 권한 설정 탭 */}
-        {currentMenu === 'workspaces' && (
+        {currentMenu === 'workspaces' && isCurrentWorkspaceOwner && (
           <div className="max-w-4xl mx-auto">
             <header className="mb-8 flex justify-between items-end">
               <div>
@@ -1265,28 +1647,30 @@ export default function App() {
                   const currentWs = allWorkspaces.find(w => w.id === activeWorkspaceId);
                   if (!currentWs) return null;
                   const isOwner = currentWs.ownerId === user.uid;
+                  const allowedEmails = getWorkspaceEmails(currentWs);
+                  const ownerEmail = normalizeEmail(currentWs.ownerEmail);
 
                   return (
                     <>
                       <div className="flex gap-2 mb-6">
                         <input type="email" placeholder="초대할 팀원의 이메일 주소 입력" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} disabled={!isOwner} className="flex-1 px-4 py-2.5 border border-slate-200 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 disabled:bg-slate-50" />
-                        <button onClick={(e) => { setInviteWs(currentWs); handleInviteSubmit(e); }} disabled={!isOwner} className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white px-5 py-2.5 rounded-lg text-sm font-bold flex items-center gap-2 transition-colors">
+                        <button onClick={(e) => handleInviteSubmit(e, currentWs)} disabled={!isOwner} className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white px-5 py-2.5 rounded-lg text-sm font-bold flex items-center gap-2 transition-colors">
                           <Mail className="w-4 h-4" /> 초대하기
                         </button>
                       </div>
                       {!isOwner && <p className="text-sm text-red-500 mb-4 font-bold flex items-center gap-1"><AlertCircle className="w-4 h-4"/> 소유자만 팀원을 초대할 수 있습니다.</p>}
                       <div className="space-y-2">
-                        {currentWs.members?.map((email, idx) => (
+                        {allowedEmails.map((email, idx) => (
                           <div key={idx} className="flex items-center justify-between p-3 border border-slate-100 rounded-lg hover:bg-slate-50">
                             <div className="flex items-center gap-3">
                               <div className="w-8 h-8 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center font-bold text-xs uppercase">{email.substring(0,1)}</div>
                               <div>
                                 <span className="font-bold text-slate-800 block text-sm">{email}</span>
-                                {email === currentWs.ownerEmail && <span className="text-[10px] bg-emerald-100 text-emerald-700 font-bold px-1.5 py-0.5 rounded">소유자</span>}
+                                {email === ownerEmail && <span className="text-[10px] bg-emerald-100 text-emerald-700 font-bold px-1.5 py-0.5 rounded">소유자</span>}
                               </div>
                             </div>
-                            {isOwner && email !== currentWs.ownerEmail && (
-                              <button onClick={() => { setInviteWs(currentWs); handleRemoveMember(email); }} className="text-sm font-bold text-red-500 hover:bg-red-50 px-3 py-1.5 rounded-lg">제외</button>
+                            {isOwner && email !== ownerEmail && (
+                              <button onClick={() => handleRemoveMember(email, currentWs)} className="text-sm font-bold text-red-500 hover:bg-red-50 px-3 py-1.5 rounded-lg">제외</button>
                             )}
                           </div>
                         ))}
@@ -1408,7 +1792,14 @@ export default function App() {
                       <div key={key} onDragOver={(e) => handleColumnDragOver(e, key)} onDragLeave={handleColumnDragLeave} onDrop={(e) => handleColumnDrop(e, key)}
                         className={`rounded-2xl border p-4 min-h-[60vh] transition-colors duration-200 ${info.borderColor} ${info.color} ${dragOverColumn === key ? 'ring-2 ring-indigo-400 bg-indigo-50/50' : ''}`}>
                         <h2 className="font-bold mb-4 flex items-center gap-2"><StatusIcon className="w-4 h-4"/>{info.label}<span className="bg-white text-slate-600 text-xs py-0.5 px-2 rounded-full font-bold border border-slate-200 ml-auto">{columnTasks.length}</span></h2>
-                        <div className="space-y-4">{columnTasks.map(renderTaskCard)}</div>
+                        <div className="space-y-4">
+                          {columnTasks.map(renderTaskCard)}
+                          {columnTasks.length === 0 && (
+                            <div className="text-center text-xs font-bold text-slate-400 bg-white/70 border border-dashed border-slate-200 rounded-xl py-8">
+                              표시할 업무가 없습니다.
+                            </div>
+                          )}
+                        </div>
                       </div>
                     );
                   })}
@@ -1418,7 +1809,13 @@ export default function App() {
                   <div className="flex gap-2 border-b border-slate-200 pb-2 overflow-x-auto">
                     {Object.entries(STATUSES).map(([key, info]) => (<button key={key} onClick={() => setActiveTab(key)} className={`px-4 py-2 rounded-t-lg text-sm font-bold relative ${activeTab === key ? 'text-indigo-600 bg-indigo-50/50' : 'text-slate-500'}`}>{info.label}</button>))}
                   </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-6">{filteredTasks.filter(t => t.status === activeTab).map(renderTaskCard)}</div>
+                  {filteredTasks.filter(t => t.status === activeTab).length > 0 ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-6">{filteredTasks.filter(t => t.status === activeTab).map(renderTaskCard)}</div>
+                  ) : (
+                    <div className="bg-white border border-dashed border-slate-200 rounded-2xl py-16 text-center text-sm font-bold text-slate-400">
+                      표시할 업무가 없습니다.
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -1450,14 +1847,25 @@ export default function App() {
                   <span className="font-bold text-slate-800 min-w-[90px] text-center text-sm">{currentMonth.getFullYear()}년 {currentMonth.getMonth() + 1}월</span>
                   <button onClick={() => changeMonth(1)} className="p-1.5 hover:bg-slate-100 rounded text-slate-600"><ChevronRight className="w-4 h-4"/></button>
                 </div>
-              </div>
-            </header>
-            {renderCalendar()}
-          </div>
-        )}
+	              </div>
+	            </header>
+	            <div className="flex flex-wrap gap-2 mb-4">
+	              {[...new Set(tasks.map(t => t.assignee || '미지정'))].map(name => {
+	                const color = getAssigneeColor(name).chip;
+	                return (
+	                  <span key={name} className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-bold ${color}`}>
+	                    <span className={`w-2 h-2 rounded-full ${getAssigneeColor(name).bar}`}></span>
+	                    {name}
+	                  </span>
+	                );
+	              })}
+	            </div>
+	            {renderCalendar()}
+	          </div>
+	        )}
 
         {/* 팀원 관리 탭 */}
-        {currentMenu === 'members' && (
+        {currentMenu === 'members' && isCurrentWorkspaceOwner && (
           <div>
             <header className="mb-8 flex justify-between items-end">
               <div><h1 className="text-2xl font-bold flex items-center gap-2"><Users className="text-indigo-600 w-7 h-7" /> 팀원 관리</h1></div>
@@ -1466,24 +1874,35 @@ export default function App() {
                 <button onClick={() => handleOpenMemberModal()} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2"><Plus className="w-4 h-4" /> 팀원 등록</button>
               </div>
             </header>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-              {filteredMembers.map(m => {
-                const age = calculateAge(m.birthday);
-                const dept = departments.find(d => d.id === m.departmentId);
-                return (
-                  <div key={m.id} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm relative group">
-                    <button onClick={() => handleOpenMemberModal(m)} className="absolute top-4 right-4 text-slate-300 hover:text-indigo-600 opacity-0 group-hover:opacity-100"><Edit2 className="w-4 h-4" /></button>
-                    <div className="text-center mb-5 mt-2"><div className="w-16 h-16 bg-gradient-to-tr from-indigo-100 to-blue-50 text-indigo-600 rounded-full flex items-center justify-center text-xl font-black mx-auto mb-3">{(m.name||'유').substring(0, 1)}</div><h3 className="font-bold text-lg text-slate-800">{m.name}</h3><p className="text-sm text-slate-500 font-medium mt-1.5">{m.rank} | {m.role} <br/>({dept?.name || '소속없음'})</p></div>
-                    <div className="mt-4 pt-4 border-t border-slate-100 flex gap-2"><button onClick={() => generateGreetingAI(m, 'birthday')} className="flex-1 bg-slate-50 hover:bg-slate-100 py-2 rounded-lg text-xs font-bold flex justify-center text-slate-600"><Cake className="w-3.5 h-3.5 mr-1"/> 생일 축하</button></div>
-                  </div>
-                );
-              })}
+	            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+	              {filteredMembers.map(m => {
+	                const age = calculateAge(m.birthday);
+	                const dept = departments.find(d => d.id === m.departmentId);
+	                const nextPromotionDate = calculateNextPromotionDate(m.rank, m.joinDate, m.promotionDate);
+	                return (
+	                  <div key={m.id} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm relative group">
+	                    <button onClick={() => handleOpenMemberModal(m)} className="absolute top-4 right-4 text-slate-300 hover:text-indigo-600 opacity-0 group-hover:opacity-100"><Edit2 className="w-4 h-4" /></button>
+	                    <div className="text-center mb-5 mt-2"><div className="w-16 h-16 bg-gradient-to-tr from-indigo-100 to-blue-50 text-indigo-600 rounded-full flex items-center justify-center text-xl font-black mx-auto mb-3">{(m.name||'유').substring(0, 1)}</div><h3 className="font-bold text-lg text-slate-800">{m.name}</h3><p className="text-sm text-slate-500 font-medium mt-1.5">{m.rank} | {m.role} <br/>({dept?.name || '소속없음'})</p></div>
+	                    <div className="grid grid-cols-2 gap-2 text-xs mb-4">
+	                      <div className="bg-slate-50 border border-slate-100 rounded-lg px-3 py-2">
+	                        <span className="block text-slate-400 font-bold mb-0.5">나이</span>
+	                        <span className="font-bold text-slate-700">{age ? `${age}세` : '-'}</span>
+	                      </div>
+	                      <div className="bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2">
+	                        <span className="block text-indigo-400 font-bold mb-0.5">다음 진급일</span>
+	                        <span className="font-bold text-indigo-700">{formatDateLabel(nextPromotionDate)}</span>
+	                      </div>
+	                    </div>
+	                    <div className="mt-4 pt-4 border-t border-slate-100 flex gap-2"><button onClick={() => generateGreetingAI(m, 'birthday')} className="flex-1 bg-slate-50 hover:bg-slate-100 py-2 rounded-lg text-xs font-bold flex justify-center text-slate-600"><Cake className="w-3.5 h-3.5 mr-1"/> 생일 축하</button></div>
+	                  </div>
+	                );
+	              })}
             </div>
           </div>
         )}
 
         {/* 조직 관리 탭 */}
-        {currentMenu === 'org' && (
+        {currentMenu === 'org' && isCurrentWorkspaceOwner && (
           <div className="max-w-4xl mx-auto">
             <header className="mb-8 flex justify-between items-end">
               <div><h1 className="text-2xl font-bold flex items-center gap-2"><Building className="text-indigo-600 w-7 h-7" /> 조직 관리</h1></div>
@@ -1522,11 +1941,11 @@ export default function App() {
             <div className="p-5 overflow-y-auto space-y-5">
               <div><label className="block text-sm font-bold mb-1">업무명 *</label><input type="text" value={taskFormData.title || ''} onChange={e => setTaskFormData({...taskFormData, title: e.target.value})} className="w-full px-3 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-indigo-500" /></div>
               <div className="grid grid-cols-2 gap-4">
-                <div className="col-span-2"><label className="block text-sm font-bold mb-1 text-indigo-700">소속 프로젝트 *</label><select value={taskFormData.projectId || ''} onChange={e => setTaskFormData({...taskFormData, projectId: e.target.value})} className="w-full px-3 py-2 border border-indigo-200 rounded-lg bg-white outline-none"><option value="" disabled>프로젝트 선택</option>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
+                <div className="col-span-2"><label className="block text-sm font-bold mb-1">소속 프로젝트</label><select value={taskFormData.projectId || ''} onChange={e => setTaskFormData({...taskFormData, projectId: e.target.value})} className="w-full px-3 py-2 border rounded-lg bg-white outline-none"><option value="">선택 안 함</option>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
                 <div><label className="block text-sm font-bold mb-1">담당자</label><select value={taskFormData.assignee || ''} onChange={e => setTaskFormData({...taskFormData, assignee: e.target.value})} className="w-full px-3 py-2 border rounded-lg bg-white"><option value="">선택 안 함</option>{members.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}</select></div>
                 <div><label className="block text-sm font-bold mb-1">상태</label><select value={taskFormData.status || 'todo'} onChange={e => setTaskFormData({...taskFormData, status: e.target.value})} className="w-full px-3 py-2 border rounded-lg bg-white"><option value="todo">진행 예정</option><option value="in-progress">진행 중</option><option value="done">완료됨</option></select></div>
-                <div><label className="block text-sm font-bold mb-1 text-indigo-700">시작일 *</label><input type="date" value={taskFormData.startDate || ''} onChange={e => setTaskFormData({...taskFormData, startDate: e.target.value})} className="w-full px-3 py-2 border rounded-lg" required /></div>
-                <div><label className="block text-sm font-bold mb-1 text-indigo-700">목표일 *</label><input type="date" value={taskFormData.targetDate || ''} onChange={e => setTaskFormData({...taskFormData, targetDate: e.target.value})} className="w-full px-3 py-2 border rounded-lg" required /></div>
+                <div><label className="block text-sm font-bold mb-1">시작일</label><input type="date" value={taskFormData.startDate || ''} onChange={e => setTaskFormData({...taskFormData, startDate: e.target.value})} className="w-full px-3 py-2 border rounded-lg" /></div>
+                <div><label className="block text-sm font-bold mb-1">목표일</label><input type="date" value={taskFormData.targetDate || ''} onChange={e => setTaskFormData({...taskFormData, targetDate: e.target.value})} className="w-full px-3 py-2 border rounded-lg" /></div>
               </div>
               <div>
                 <div className="flex justify-between items-center mb-1"><label className="block text-sm font-bold">상세 설명</label><button type="button" onClick={polishDescriptionAI} className="text-xs bg-indigo-50 text-indigo-600 px-2 py-1 rounded border border-indigo-100 font-bold flex items-center gap-1 hover:bg-indigo-100"><Sparkles className="w-3 h-3"/> AI 문장 다듬기</button></div>
@@ -1568,8 +1987,14 @@ export default function App() {
                 <div className="col-span-2"><label className="block text-sm font-bold mb-1">소속 부서</label><select value={memberFormData.departmentId || ''} onChange={e => setMemberFormData({...memberFormData, departmentId: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm bg-white"><option value="">-- 선택 안 함 --</option>{departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
                 <div className="col-span-2"><label className="block text-sm font-bold mb-1">직무</label><input type="text" value={memberFormData.role || ''} onChange={e => setMemberFormData({...memberFormData, role: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
                 <div><label className="block text-sm font-bold mb-1">입사일</label><input type="date" value={memberFormData.joinDate || ''} onChange={e => setMemberFormData({...memberFormData, joinDate: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
-                <div><label className="block text-sm font-bold mb-1">최근 진급일</label><input type="date" value={memberFormData.promotionDate || ''} onChange={e => setMemberFormData({...memberFormData, promotionDate: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
-                <div className="col-span-2"><label className="block text-sm font-bold mb-1">생일</label><input type="date" value={memberFormData.birthday || ''} onChange={e => setMemberFormData({...memberFormData, birthday: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
+	                <div><label className="block text-sm font-bold mb-1">최근 진급일</label><input type="date" value={memberFormData.promotionDate || ''} onChange={e => setMemberFormData({...memberFormData, promotionDate: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
+	                <div className="col-span-2 bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2.5">
+	                  <span className="block text-xs font-bold text-indigo-500 mb-1">다음 진급일</span>
+	                  <span className="text-sm font-black text-indigo-800">
+	                    {formatDateLabel(calculateNextPromotionDate(memberFormData.rank, memberFormData.joinDate, memberFormData.promotionDate))}
+	                  </span>
+	                </div>
+	                <div className="col-span-2"><label className="block text-sm font-bold mb-1">생일</label><input type="date" value={memberFormData.birthday || ''} onChange={e => setMemberFormData({...memberFormData, birthday: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
               </div>
             </div>
             <div className="p-4 border-t bg-slate-50 flex justify-between rounded-b-2xl">{editingMember ? <button onClick={() => deleteMember(editingMember.id)} className="text-red-500 font-bold px-2 text-sm">삭제</button> : <div></div>}<div className="flex gap-2"><button onClick={() => setIsMemberModalOpen(false)} className="px-4 py-2 border rounded-lg text-sm font-bold bg-white">취소</button><button onClick={handleMemberSubmit} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-bold">저장</button></div></div>
@@ -1605,8 +2030,8 @@ export default function App() {
             <h3 className="font-bold text-lg text-slate-800 mb-2">{customAlert.title}</h3>
             <p className="text-slate-600 text-sm mb-6 whitespace-pre-wrap">{customAlert.message}</p>
             <div className="flex justify-center gap-3">
-              {customAlert.isConfirm && <button onClick={closeAlert} className="px-5 py-2.5 bg-slate-100 text-slate-700 rounded-xl text-sm font-bold">취소</button>}
-              <button onClick={() => { if (customAlert.onConfirm) customAlert.onConfirm(); closeAlert(); }} className="px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-bold w-full">{customAlert.isConfirm ? '확인' : '닫기'}</button>
+              <button onClick={() => { if (customAlert.onConfirm) customAlert.onConfirm(); closeAlert(); }} className={`px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-bold ${customAlert.isConfirm ? 'flex-1' : 'w-full'}`}>{customAlert.isConfirm ? '확인' : '닫기'}</button>
+              {customAlert.isConfirm && <button onClick={closeAlert} className="flex-1 px-5 py-2.5 bg-slate-100 text-slate-700 rounded-xl text-sm font-bold">취소</button>}
             </div>
           </div>
         </div>

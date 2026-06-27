@@ -8,6 +8,6 @@ export default defineConfig({
     react(),
     tailwindcss(),
   ],
-  // 🚨 GitHub Pages 배포를 위한 경로 설정 (레포지토리 이름)
-  base: '/TeamManage/',
+  // 🚨 Firebase Hosting 배포를 위해 최상위 경로로 수정
+  base: '/', 
 })

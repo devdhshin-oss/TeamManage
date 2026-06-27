@@ -1,6 +1,12 @@
 {
+  "firestore": [
+    {
+      "database": "default",
+      "rules": "firestore.rules"
+    }
+  ],
   "hosting": {
-    "target": "teammanage",
+    "site": "teammanage",
     "public": "dist",
     "ignore": [
       "firebase.json",

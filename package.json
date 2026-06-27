@@ -6,6 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "deploy": "npm run build && npx -y firebase-tools@latest deploy --only firestore:rules,hosting",
+    "deploy:hosting": "npm run build && npx -y firebase-tools@latest deploy --only hosting",
+    "deploy:rules": "npx -y firebase-tools@latest deploy --only firestore:rules",
     "lint": "eslint .",
     "preview": "vite preview"
   },
