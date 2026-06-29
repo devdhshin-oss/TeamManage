@@ -376,6 +376,7 @@ export default function App() {
 
   // 현재 선택된 워크스페이스
   const [activeWorkspaceIdState, setActiveWorkspaceIdState] = useState(null);
+  const [workspacesRefreshCounter, setWorkspacesRefreshCounter] = useState(0);
 
   const setActiveWorkspaceId = (id) => {
     setActiveWorkspaceIdState(id);
@@ -709,7 +710,7 @@ export default function App() {
 
     loadWorkspaces();
     return () => { cancelled = true; };
-  }, [user, activeWorkspaceId]);
+  }, [user, activeWorkspaceId, workspacesRefreshCounter]);
 
   useEffect(() => {
     loadWorkspaceData();
@@ -1207,19 +1208,12 @@ export default function App() {
       const docRef = doc(db, ...getPath('workspaceAccess'), invite.id);
       await setDoc(docRef, { status: 'accepted' }, { merge: true });
 
-      // 워크스페이스를 Firestore에서 직접 로드하여 로컬 상태에 추가
-      const wsDocRef = doc(db, ...getPath('workspaces'), invite.workspaceId);
-      const wsSnap = await getDoc(wsDocRef);
-      if (wsSnap.exists()) {
-        const wsData = normalizeWorkspaceData({ id: wsSnap.id, ...wsSnap.data() });
-        setAllWorkspaces(prev => {
-          const exists = prev.some(w => w.id === wsData.id);
-          return exists ? prev.map(w => w.id === wsData.id ? wsData : w) : [...prev, wsData];
-        });
-      }
-
       setPendingInvites(prev => prev.filter(i => i.id !== invite.id));
       setInviteAccessDocs(prev => ({ ...prev, [invite.workspaceId]: 'accepted' }));
+
+      // workspacesRefreshCounter 증가 → loadWorkspaces effect 재실행 → 수락된 워크스페이스 로드
+      setWorkspacesRefreshCounter(c => c + 1);
+
       showAlert('초대 수락', `"${invite.workspaceName}" 워크스페이스에 참여했습니다!\n좌측 상단에서 워크스페이스를 선택하세요.`);
     } catch (err) {
       console.error('초대 수락 실패:', err);
