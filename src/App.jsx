@@ -776,7 +776,10 @@ export default function App() {
         await syncWorkspaceAccessDocs(dataToSave);
       }
       syncLocalCollection(colName, id, dataToSave);
-    } catch (e) { console.error(e); showAlert("저장 실패", "클라우드 저장에 실패했습니다."); }
+    } catch (e) { 
+      console.error(e); 
+      showAlert("저장 실패", `클라우드 저장에 실패했습니다. (사유: ${e.message || e})`); 
+    }
   };
 
   const deleteFromFirebase = async (colName, id) => {
@@ -1280,7 +1283,26 @@ export default function App() {
     if (!isCurrentWorkspaceOwner) return showAlert('권한 없음', '워크스페이스 소유자만 팀원을 관리할 수 있습니다.');
     const memberId = editingMember ? editingMember.id : `m_${Date.now()}`;
     const annualLeaveBase = memberFormData.annualLeaveBase === '' ? '' : Number(memberFormData.annualLeaveBase);
-    const memberData = { ...memberFormData, annualLeaveBase, id: memberId, workspaceId: activeWorkspaceId };
+    
+    // Sanitize memberData to strictly contain only the allowed fields in Firestore rules
+    const allowedKeys = [
+      'id', 'workspaceId', 'name', 'rank', 'departmentId', 'role',
+      'joinDate', 'promotionDate', 'birthday', 'email', 'phone',
+      'annualLeaveBase', 'isAdmin'
+    ];
+    const memberData = {};
+    allowedKeys.forEach(key => {
+      if (memberFormData[key] !== undefined) {
+        memberData[key] = memberFormData[key];
+      }
+    });
+    memberData.id = memberId;
+    memberData.workspaceId = activeWorkspaceId;
+    memberData.annualLeaveBase = annualLeaveBase;
+    if (memberData.isAdmin === undefined) {
+      memberData.isAdmin = false;
+    }
+
     setIsMemberModalOpen(false);
     await saveToFirebase('members', memberId, memberData);
   };
