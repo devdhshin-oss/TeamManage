@@ -1944,7 +1944,7 @@ export default function App() {
               <>
                 <button onClick={() => setCurrentMenu('members')} className={`px-3 py-1.5 rounded-lg text-sm font-bold flex items-center gap-2 ${currentMenu === 'members' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-100'}`}><Users className="w-4 h-4" /> 팀원 관리</button>
                 <button onClick={() => setCurrentMenu('org')} className={`px-3 py-1.5 rounded-lg text-sm font-bold flex items-center gap-2 ${currentMenu === 'org' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-100'}`}><Building className="w-4 h-4" /> 조직 관리</button>
-                <button onClick={() => setCurrentMenu('workspaces')} className={`px-3 py-1.5 rounded-lg text-sm font-bold flex items-center gap-2 ${currentMenu === 'workspaces' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-100'}`}><Key className="w-4 h-4" /> 권한 설정</button>
+                <button onClick={() => setCurrentMenu('workspaces')} className={`px-3 py-1.5 rounded-lg text-sm font-bold flex items-center gap-2 ${currentMenu === 'workspaces' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-100'}`}><UserPlus className="w-4 h-4" /> 멤버 초대</button>
               </>
             )}
             {isAdmin && (
@@ -1961,7 +1961,7 @@ export default function App() {
               <option value="calendar">캘린더</option>
               {isCurrentWorkspaceOwner && <option value="members">팀원</option>}
               {isCurrentWorkspaceOwner && <option value="org">조직</option>}
-              {isCurrentWorkspaceOwner && <option value="workspaces">권한 설정</option>}
+              {isCurrentWorkspaceOwner && <option value="workspaces">멤버 초대</option>}
               {isAdmin && <option value="eval">평가 관리</option>}
             </select>
           </div>
@@ -1998,7 +1998,7 @@ export default function App() {
           <div className="max-w-4xl mx-auto">
             <header className="mb-8 flex justify-between items-end">
               <div>
-                <h1 className="text-2xl font-bold flex items-center gap-2"><Briefcase className="text-indigo-600 w-7 h-7" /> 권한 및 초대 설정</h1>
+                <h1 className="text-2xl font-bold flex items-center gap-2"><UserPlus className="text-indigo-600 w-7 h-7" /> 멤버 초대 설정</h1>
                 <p className="text-sm text-slate-500 mt-2">현재 워크스페이스에 접속할 수 있는 사람의 이메일을 등록하세요.</p>
               </div>
             </header>
