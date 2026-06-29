@@ -185,7 +185,7 @@ service cloud.firestore {
       return hasOnly(data, [
         'id', 'workspaceId', 'name', 'rank', 'departmentId', 'role',
         'joinDate', 'promotionDate', 'birthday', 'email', 'phone',
-        'annualLeaveBase'
+        'annualLeaveBase', 'isAdmin'
       ]) &&
         hasRequired(data, ['id', 'workspaceId', 'name']) &&
         data.id is string &&
@@ -201,6 +201,7 @@ service cloud.firestore {
         optionalString(data, 'birthday', 20) &&
         optionalString(data, 'email', 254) &&
         optionalString(data, 'phone', 50) &&
+        optionalBool(data, 'isAdmin') &&
         (!(data.keys().hasAny(['annualLeaveBase'])) ||
           data.annualLeaveBase == '' ||
           data.annualLeaveBase is int ||
