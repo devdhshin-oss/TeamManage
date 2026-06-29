@@ -384,6 +384,7 @@ export default function App() {
       setSearchQuery('');
       setActiveTab('in-progress');
       setExpandedDepartments({});
+      setExpandedOrgDepartments({});
       setSelectedEvalMember(null);
     }
   };
@@ -438,6 +439,15 @@ export default function App() {
 
   const toggleDepartment = (deptId) => {
     setExpandedDepartments(prev => ({
+      ...prev,
+      [deptId]: !prev[deptId]
+    }));
+  };
+
+  const [expandedOrgDepartments, setExpandedOrgDepartments] = useState({});
+
+  const toggleOrgDepartment = (deptId) => {
+    setExpandedOrgDepartments(prev => ({
       ...prev,
       [deptId]: !prev[deptId]
     }));
@@ -1506,11 +1516,24 @@ export default function App() {
       <div className={`${level > 0 ? 'ml-8 mt-3 pl-4 border-l-2 border-indigo-100' : ''} space-y-3`}>
         {children.map(dept => {
           const deptMembers = members.filter(m => m.departmentId === dept.id);
+          const isExpanded = !!expandedOrgDepartments[dept.id];
+          const hasChildren = departments.some(d => d.parentId === dept.id);
+          const hasMembers = deptMembers.length > 0;
+          const canToggle = hasChildren || hasMembers;
+
           return (
             <div key={dept.id} className="relative">
               <div className="bg-white border border-slate-200 p-3.5 rounded-xl shadow-sm hover:border-indigo-300 hover:shadow-md transition-all group">
                 <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
+                  <div 
+                    className={`flex items-center gap-3 ${canToggle ? 'cursor-pointer select-none' : ''}`}
+                    onClick={() => canToggle && toggleOrgDepartment(dept.id)}
+                  >
+                    {canToggle && (
+                      <div className="text-slate-400">
+                        {isExpanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                      </div>
+                    )}
                     <div className={`p-2 rounded-lg ${level === 0 ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-500'}`}><Network className="w-4 h-4" /></div>
                     <div>
                       <span className="font-bold text-slate-800">{dept.name}</span>
@@ -1522,7 +1545,7 @@ export default function App() {
                     <button onClick={() => deleteDepartment(dept.id)} className="text-xs bg-red-50 text-red-500 font-bold hover:bg-red-100 px-2 py-1.5 rounded-lg"><Trash2 className="w-3.5 h-3.5" /></button>
                   </div>
                 </div>
-                {deptMembers.length > 0 && (
+                {isExpanded && deptMembers.length > 0 && (
                   <div className="mt-3 pt-3 border-t border-slate-50 pl-11 flex flex-wrap gap-2">
                     {deptMembers.map(m => (
                       <div key={m.id} className="inline-flex items-center gap-1.5 bg-slate-50 hover:bg-slate-100 text-slate-600 text-xs px-2.5 py-1.5 rounded-lg border border-slate-100 transition-colors cursor-default" title={`${m.role}`}>
@@ -1533,7 +1556,7 @@ export default function App() {
                   </div>
                 )}
               </div>
-              {renderOrganizationTree(dept.id, level + 1)}
+              {isExpanded && renderOrganizationTree(dept.id, level + 1)}
             </div>
           )
         })}
