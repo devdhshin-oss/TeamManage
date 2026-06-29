@@ -661,6 +661,7 @@ export default function App() {
           try {
             workspaceResults.push(...docsFromSnapshot(await getDocs(workspaceQuery), 'workspaces'));
           } catch (error) {
+            console.error("runWorkspaceQuery failed:", error);
             queryErrors.push(error);
           }
         };
@@ -676,14 +677,9 @@ export default function App() {
             }));
             workspaceResults.push(...accessWorkspaces.filter(Boolean));
           } catch (error) {
+            console.error("workspaceAccess lookup failed:", error);
             queryErrors.push(error);
           }
-        }
-        for (const accessKey of userAccessKeys) {
-          await runWorkspaceQuery(query(wsRef, where('accessKeys', 'array-contains', accessKey)));
-        }
-        if (userEmail) {
-          await runWorkspaceQuery(query(wsRef, where('members', 'array-contains', userEmail)));
         }
 
         if (workspaceResults.length === 0 && queryErrors.length > 0) {
@@ -1097,6 +1093,14 @@ export default function App() {
       allProjects.filter(p => p.workspaceId === id).forEach(p => deleteFromFirebase('projects', p.id));
       allMembers.filter(m => m.workspaceId === id).forEach(m => deleteFromFirebase('members', m.id));
       allDepartments.filter(d => d.workspaceId === id).forEach(d => deleteFromFirebase('departments', d.id));
+
+      getWorkspaceEmails(targetWs).forEach(async (email) => {
+        try {
+          await deleteDoc(doc(db, ...getPath('workspaceAccess'), getWorkspaceAccessDocId(id, email)));
+        } catch (err) {
+          console.error("Failed to delete workspaceAccess doc:", err);
+        }
+      });
 
       await deleteFromFirebase('workspaces', id);
       if (activeWorkspaceId === id) setActiveWorkspaceId(null);
