@@ -20,6 +20,10 @@ service cloud.firestore {
     // Shared field:
     //   - workspaceId: string, required, immutable after create
     //
+    // Collection: artifacts/{appId}/public/data/members
+    // Additional fields:
+    //   - annualLeaveBase: number or empty string, optional, manually assigned annual leave days
+    //
     // Collection: artifacts/{appId}/public/data/workspaceAccess
     // Fields:
     //   - id: string, document id mirrored by client
@@ -180,7 +184,8 @@ service cloud.firestore {
     function validMember(data) {
       return hasOnly(data, [
         'id', 'workspaceId', 'name', 'rank', 'departmentId', 'role',
-        'joinDate', 'promotionDate', 'birthday', 'email', 'phone'
+        'joinDate', 'promotionDate', 'birthday', 'email', 'phone',
+        'annualLeaveBase'
       ]) &&
         hasRequired(data, ['id', 'workspaceId', 'name']) &&
         data.id is string &&
@@ -195,7 +200,11 @@ service cloud.firestore {
         optionalString(data, 'promotionDate', 20) &&
         optionalString(data, 'birthday', 20) &&
         optionalString(data, 'email', 254) &&
-        optionalString(data, 'phone', 50);
+        optionalString(data, 'phone', 50) &&
+        (!(data.keys().hasAny(['annualLeaveBase'])) ||
+          data.annualLeaveBase == '' ||
+          data.annualLeaveBase is int ||
+          data.annualLeaveBase is float);
     }
 
     function validDepartment(data) {

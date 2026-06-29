@@ -39,6 +39,8 @@ const db = getFirestore(app, 'default');
 const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
 const LAST_AUTH_EMAIL_KEY = 'teamspace_last_auth_email';
+const GOOGLE_CALENDAR_CONFIG_KEY = 'teamspace_google_calendar_config';
+const GOOGLE_CALENDAR_EVENTS_KEY = 'teamspace_google_calendar_events';
 // ============================================================================
 
 const getLastAuthEmail = () => {
@@ -188,6 +190,120 @@ const calculateAge = (birthday) => {
   return age;
 };
 
+const toDate = (dateStr) => {
+  if (!dateStr) return null;
+  const date = new Date(dateStr);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const getTodayDate = () => {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return today;
+};
+
+const getCompletedYears = (fromDate, toDateValue = getTodayDate()) => {
+  const from = toDate(fromDate);
+  if (!from) return 0;
+  let years = toDateValue.getFullYear() - from.getFullYear();
+  const monthDiff = toDateValue.getMonth() - from.getMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && toDateValue.getDate() < from.getDate())) years -= 1;
+  return Math.max(0, years);
+};
+
+const calculateStatutoryAnnualLeave = (joinDate) => {
+  const join = toDate(joinDate);
+  if (!join) return 0;
+  const today = getTodayDate();
+  const years = getCompletedYears(joinDate, today);
+  if (years < 1) {
+    let months = (today.getFullYear() - join.getFullYear()) * 12 + today.getMonth() - join.getMonth();
+    if (today.getDate() < join.getDate()) months -= 1;
+    return Math.max(0, Math.min(11, months));
+  }
+  return Math.min(25, 15 + Math.floor((years - 1) / 2));
+};
+
+const getAnnualLeaveBase = (member) => {
+  const parsed = Number(member?.annualLeaveBase);
+  return Number.isFinite(parsed) ? parsed : calculateStatutoryAnnualLeave(member?.joinDate);
+};
+
+const eachDateInRange = (startDate, endDate) => {
+  const dates = [];
+  const current = toDate(startDate);
+  const end = toDate(endDate || startDate);
+  if (!current || !end) return dates;
+  current.setHours(0, 0, 0, 0);
+  end.setHours(0, 0, 0, 0);
+  while (current <= end) {
+    dates.push(new Date(current));
+    current.setDate(current.getDate() + 1);
+  }
+  return dates;
+};
+
+const countBusinessDays = (startDate, endDate) => eachDateInRange(startDate, endDate)
+  .filter(date => date.getDay() !== 0 && date.getDay() !== 6)
+  .length;
+
+const normalizeCalendarEvents = (events = []) => events.map((event, index) => {
+  const summary = event.summary || '';
+  const start = event.start?.date || event.start?.dateTime || '';
+  const rawEnd = event.end?.date || event.end?.dateTime || start;
+  const startDate = start.slice(0, 10);
+  let endDate = rawEnd.slice(0, 10);
+  if (event.end?.date && endDate) {
+    const exclusiveEnd = new Date(endDate);
+    exclusiveEnd.setDate(exclusiveEnd.getDate() - 1);
+    endDate = exclusiveEnd.toISOString().slice(0, 10);
+  }
+  return {
+    id: event.id || `calendar_${index}_${startDate}`,
+    summary,
+    description: event.description || '',
+    startDate,
+    endDate: endDate || startDate,
+  };
+}).filter(event => event.summary && event.startDate);
+
+const getLeaveDaysFromEvent = (event) => {
+  const text = `${event.summary || ''} ${event.description || ''}`;
+  if (!/(연차|휴가|반차|오전반차|오후반차)/i.test(text)) return 0;
+  if (/(반차|오전반차|오후반차)/i.test(text)) return 0.5;
+  return countBusinessDays(event.startDate, event.endDate);
+};
+
+const getUsedAnnualLeaveDays = (member, events) => {
+  const memberName = member?.name || '';
+  if (!memberName) return 0;
+  return events.reduce((total, event) => {
+    const text = `${event.summary || ''} ${event.description || ''}`;
+    if (!text.includes(memberName)) return total;
+    return total + getLeaveDaysFromEvent(event);
+  }, 0);
+};
+
+const formatLeaveDays = (value) => {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return '0일';
+  return `${Number.isInteger(number) ? number : number.toFixed(1)}일`;
+};
+
+const readStoredJson = (key, fallback) => {
+  if (typeof localStorage === 'undefined') return fallback;
+  try {
+    return JSON.parse(localStorage.getItem(key) || '') || fallback;
+  } catch {
+    return fallback;
+  }
+};
+
+const extractGoogleCalendarApiKey = (data) => {
+  if (!data || typeof data !== 'object') return '';
+  return data.apiKey || data.key || data.API_KEY || data.googleApiKey || data.calendarApiKey || data.installed?.api_key || data.web?.api_key || '';
+};
+
 const calculateNextPromotionDate = (rank, joinDate, promotionDate) => {
   if (!joinDate || rank === '부장' || rank === '임원') return null;
   const yearsRequired = { '사원': 3, '대리': 3, '과장': 4, '차장': 4 };
@@ -310,6 +426,9 @@ export default function App() {
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [calendarFilterAssignee, setCalendarFilterAssignee] = useState('all');
   const [calendarFilterProject, setCalendarFilterProject] = useState('all');
+  const [googleCalendarConfig, setGoogleCalendarConfig] = useState(() => readStoredJson(GOOGLE_CALENDAR_CONFIG_KEY, { apiKey: '', calendarId: '', year: String(new Date().getFullYear()) }));
+  const [annualLeaveEvents, setAnnualLeaveEvents] = useState(() => readStoredJson(GOOGLE_CALENDAR_EVENTS_KEY, []));
+  const [isCalendarSyncing, setIsCalendarSyncing] = useState(false);
 
   // 모달 상태
   const [isTaskModalOpen, setIsTaskModalOpen] = useState(false);
@@ -333,7 +452,7 @@ export default function App() {
 
   const [editingMember, setEditingMember] = useState(null);
   const [memberFormData, setMemberFormData] = useState({
-    name: '', rank: '사원', departmentId: '', role: '', joinDate: '', promotionDate: '', birthday: '', email: '', phone: ''
+    name: '', rank: '사원', departmentId: '', role: '', joinDate: '', promotionDate: '', birthday: '', email: '', phone: '', annualLeaveBase: ''
   });
   
   const [orgFormData, setOrgFormData] = useState({ name: '', parentId: null });
@@ -351,6 +470,7 @@ export default function App() {
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
   const fileInputRef = useRef(null);
+  const googleCalendarKeyInputRef = useRef(null);
 
   // --- 커스텀 알림 ---
   const showAlert = (title, message, isWide = false) => setCustomAlert({ isOpen: true, title, message, isConfirm: false, isWide });
@@ -777,6 +897,73 @@ export default function App() {
     e.target.value = ''; 
   };
 
+  const persistGoogleCalendarConfig = (nextConfig) => {
+    setGoogleCalendarConfig(nextConfig);
+    localStorage.setItem(GOOGLE_CALENDAR_CONFIG_KEY, JSON.stringify(nextConfig));
+  };
+
+  const handleGoogleCalendarKeyUpload = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const parsed = JSON.parse(event.target.result);
+        if (parsed.private_key) {
+          showAlert('키 파일 확인 필요', '서비스 계정 JSON이 감지되었습니다. Spark 플랜에서는 Google Cloud API Key JSON을 업로드해주세요.');
+          return;
+        }
+        const extractedApiKey = extractGoogleCalendarApiKey(parsed);
+        if (!extractedApiKey) {
+          showAlert('API Key 없음', 'JSON 파일에서 apiKey, key, API_KEY 값을 찾지 못했습니다.');
+          return;
+        }
+        persistGoogleCalendarConfig({ ...googleCalendarConfig, apiKey: extractedApiKey });
+        showAlert('API Key 등록 완료', 'Google Calendar API Key를 로컬에 저장했습니다. 캘린더 ID를 입력한 뒤 동기화하세요.');
+      } catch (error) {
+        showAlert('키 파일 오류', 'Google Calendar API Key JSON 파일 형식을 확인해주세요.');
+      }
+    };
+    reader.readAsText(file);
+    e.target.value = '';
+  };
+
+  const syncGoogleCalendarAnnualLeave = async () => {
+    const apiKeyValue = googleCalendarConfig.apiKey?.trim();
+    const calendarId = googleCalendarConfig.calendarId?.trim();
+    const year = Number(googleCalendarConfig.year) || new Date().getFullYear();
+    if (!apiKeyValue) return showAlert('API Key 필요', 'Google Calendar API Key JSON을 먼저 업로드해주세요.');
+    if (!calendarId) return showAlert('캘린더 ID 필요', '연차 일정이 등록된 Google Calendar ID를 입력해주세요.');
+
+    setIsCalendarSyncing(true);
+    try {
+      const timeMin = `${year}-01-01T00:00:00Z`;
+      const timeMax = `${year + 1}-01-01T00:00:00Z`;
+      const url = new URL(`https://www.googleapis.com/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`);
+      url.searchParams.set('key', apiKeyValue);
+      url.searchParams.set('timeMin', timeMin);
+      url.searchParams.set('timeMax', timeMax);
+      url.searchParams.set('singleEvents', 'true');
+      url.searchParams.set('orderBy', 'startTime');
+      url.searchParams.set('maxResults', '2500');
+
+      const response = await fetch(url.toString());
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.error?.message || 'Google Calendar API 호출에 실패했습니다.');
+      }
+      const normalizedEvents = normalizeCalendarEvents(data.items || []);
+      setAnnualLeaveEvents(normalizedEvents);
+      localStorage.setItem(GOOGLE_CALENDAR_EVENTS_KEY, JSON.stringify(normalizedEvents));
+      localStorage.setItem(GOOGLE_CALENDAR_CONFIG_KEY, JSON.stringify(googleCalendarConfig));
+      showAlert('캘린더 동기화 완료', `${year}년 캘린더 이벤트 ${normalizedEvents.length}건을 불러왔습니다.`);
+    } catch (error) {
+      showAlert('캘린더 동기화 실패', `${error.message}\nAPI Key 제한 설정, Calendar API 활성화, 캘린더 공개 설정, 캘린더 ID를 확인해주세요.`, true);
+    } finally {
+      setIsCalendarSyncing(false);
+    }
+  };
+
   // --- 워크스페이스 로직 ---
   const handleOpenWsModal = (ws = null) => {
     const isEvent = ws && ws.nativeEvent;
@@ -997,10 +1184,10 @@ export default function App() {
 
     if (validMember) {
       setEditingMember(validMember);
-      setMemberFormData({ ...validMember });
+      setMemberFormData({ annualLeaveBase: '', ...validMember });
     } else {
       setEditingMember(null);
-      setMemberFormData({ name: '', rank: '사원', departmentId: departments.length > 0 ? departments[0].id : '', role: '', joinDate: '', promotionDate: '', birthday: '', email: '', phone: '' });
+      setMemberFormData({ name: '', rank: '사원', departmentId: departments.length > 0 ? departments[0].id : '', role: '', joinDate: '', promotionDate: '', birthday: '', email: '', phone: '', annualLeaveBase: '' });
     }
     setIsMemberModalOpen(true);
   };
@@ -1009,7 +1196,8 @@ export default function App() {
     e.preventDefault();
     if (!isCurrentWorkspaceOwner) return showAlert('권한 없음', '워크스페이스 소유자만 팀원을 관리할 수 있습니다.');
     const memberId = editingMember ? editingMember.id : `m_${Date.now()}`;
-    const memberData = { ...memberFormData, id: memberId, workspaceId: activeWorkspaceId };
+    const annualLeaveBase = memberFormData.annualLeaveBase === '' ? '' : Number(memberFormData.annualLeaveBase);
+    const memberData = { ...memberFormData, annualLeaveBase, id: memberId, workspaceId: activeWorkspaceId };
     setIsMemberModalOpen(false);
     await saveToFirebase('members', memberId, memberData);
   };
@@ -1867,18 +2055,49 @@ export default function App() {
         {/* 팀원 관리 탭 */}
         {currentMenu === 'members' && isCurrentWorkspaceOwner && (
           <div>
-            <header className="mb-8 flex justify-between items-end">
-              <div><h1 className="text-2xl font-bold flex items-center gap-2"><Users className="text-indigo-600 w-7 h-7" /> 팀원 관리</h1></div>
-              <div className="flex gap-3">
+            <header className="mb-6 flex flex-col xl:flex-row xl:justify-between xl:items-end gap-4">
+              <div>
+                <h1 className="text-2xl font-bold flex items-center gap-2"><Users className="text-indigo-600 w-7 h-7" /> 팀원 관리</h1>
+                <p className="text-sm text-slate-500 mt-2">입사일 기준 부여 연차와 Google Calendar API 일정으로 잔여연차를 계산합니다.</p>
+              </div>
+              <div className="flex flex-wrap gap-3">
                 <input type="text" placeholder="이름/직급 검색..." value={memberSearchQuery} onChange={(e) => setMemberSearchQuery(e.target.value)} className="px-4 py-2 rounded-lg border border-slate-200 text-sm outline-none focus:ring-2 focus:ring-indigo-500" />
                 <button onClick={() => handleOpenMemberModal()} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2"><Plus className="w-4 h-4" /> 팀원 등록</button>
               </div>
             </header>
+
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 mb-6">
+              <input type="file" accept=".json,application/json" ref={googleCalendarKeyInputRef} onChange={handleGoogleCalendarKeyUpload} className="hidden" />
+              <div className="grid grid-cols-1 lg:grid-cols-[auto_1fr_120px_auto] gap-3 items-end">
+                <button onClick={() => googleCalendarKeyInputRef.current?.click()} className="bg-white border border-slate-200 text-slate-700 px-4 py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-2 hover:bg-slate-50">
+                  <Upload className="w-4 h-4" /> API Key JSON
+                </button>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-1">Google Calendar ID</label>
+                  <input type="text" value={googleCalendarConfig.calendarId || ''} onChange={e => persistGoogleCalendarConfig({ ...googleCalendarConfig, calendarId: e.target.value })} placeholder="예: company.com_xxxxx@group.calendar.google.com" className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-1">조회 연도</label>
+                  <input type="number" value={googleCalendarConfig.year || ''} onChange={e => persistGoogleCalendarConfig({ ...googleCalendarConfig, year: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500" />
+                </div>
+                <button onClick={syncGoogleCalendarAnnualLeave} disabled={isCalendarSyncing} className="bg-emerald-600 disabled:bg-slate-300 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-2">
+                  <CalendarDays className="w-4 h-4" /> {isCalendarSyncing ? '동기화 중' : '연차 동기화'}
+                </button>
+              </div>
+              <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
+                <span className="font-bold text-slate-700">불러온 일정 {annualLeaveEvents.length}건</span>
+                <span>API Key는 브라우저에서 사용되므로 HTTP referrer와 Calendar API 제한을 설정하세요.</span>
+                <span>일정 제목/설명에 팀원 이름과 연차, 휴가, 반차 키워드가 함께 있어야 사용 연차로 계산됩니다.</span>
+              </div>
+            </div>
 	            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
 	              {filteredMembers.map(m => {
 	                const age = calculateAge(m.birthday);
 	                const dept = departments.find(d => d.id === m.departmentId);
 	                const nextPromotionDate = calculateNextPromotionDate(m.rank, m.joinDate, m.promotionDate);
+                  const annualLeaveBase = getAnnualLeaveBase(m);
+                  const usedAnnualLeave = getUsedAnnualLeaveDays(m, annualLeaveEvents);
+                  const remainingAnnualLeave = annualLeaveBase - usedAnnualLeave;
 	                return (
 	                  <div key={m.id} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm relative group">
 	                    <button onClick={() => handleOpenMemberModal(m)} className="absolute top-4 right-4 text-slate-300 hover:text-indigo-600 opacity-0 group-hover:opacity-100"><Edit2 className="w-4 h-4" /></button>
@@ -1892,6 +2111,14 @@ export default function App() {
 	                        <span className="block text-indigo-400 font-bold mb-0.5">다음 진급일</span>
 	                        <span className="font-bold text-indigo-700">{formatDateLabel(nextPromotionDate)}</span>
 	                      </div>
+                        <div className="bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2">
+                          <span className="block text-emerald-500 font-bold mb-0.5">잔여 연차</span>
+                          <span className={`font-bold ${remainingAnnualLeave < 0 ? 'text-red-600' : 'text-emerald-700'}`}>{formatLeaveDays(remainingAnnualLeave)}</span>
+                        </div>
+                        <div className="bg-slate-50 border border-slate-100 rounded-lg px-3 py-2">
+                          <span className="block text-slate-400 font-bold mb-0.5">부여/사용</span>
+                          <span className="font-bold text-slate-700">{formatLeaveDays(annualLeaveBase)} / {formatLeaveDays(usedAnnualLeave)}</span>
+                        </div>
 	                    </div>
 	                    <div className="mt-4 pt-4 border-t border-slate-100 flex gap-2"><button onClick={() => generateGreetingAI(m, 'birthday')} className="flex-1 bg-slate-50 hover:bg-slate-100 py-2 rounded-lg text-xs font-bold flex justify-center text-slate-600"><Cake className="w-3.5 h-3.5 mr-1"/> 생일 축하</button></div>
 	                  </div>
@@ -1995,6 +2222,11 @@ export default function App() {
 	                  </span>
 	                </div>
 	                <div className="col-span-2"><label className="block text-sm font-bold mb-1">생일</label><input type="date" value={memberFormData.birthday || ''} onChange={e => setMemberFormData({...memberFormData, birthday: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
+                  <div><label className="block text-sm font-bold mb-1">연차 입력</label><input type="number" step="0.5" value={memberFormData.annualLeaveBase ?? ''} onChange={e => setMemberFormData({...memberFormData, annualLeaveBase: e.target.value})} placeholder={String(calculateStatutoryAnnualLeave(memberFormData.joinDate))} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
+                  <div className="bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2.5">
+                    <span className="block text-xs font-bold text-emerald-500 mb-1">기준 부여 연차</span>
+                    <span className="text-sm font-black text-emerald-800">{formatLeaveDays(getAnnualLeaveBase(memberFormData))}</span>
+                  </div>
               </div>
             </div>
             <div className="p-4 border-t bg-slate-50 flex justify-between rounded-b-2xl">{editingMember ? <button onClick={() => deleteMember(editingMember.id)} className="text-red-500 font-bold px-2 text-sm">삭제</button> : <div></div>}<div className="flex gap-2"><button onClick={() => setIsMemberModalOpen(false)} className="px-4 py-2 border rounded-lg text-sm font-bold bg-white">취소</button><button onClick={handleMemberSubmit} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-bold">저장</button></div></div>
