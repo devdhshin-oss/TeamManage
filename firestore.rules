@@ -32,6 +32,7 @@ service cloud.firestore {
     //   - email: string, required, normalized lowercase invited account
     //   - ownerId: string, required, workspace owner uid
     //   - createdAt: string, optional date label
+    //   - status: string, optional, one of pending/accepted/declined
     //
     // ===============================================================
     // Helper Functions
@@ -50,6 +51,10 @@ service cloud.firestore {
       return /databases/$(database)/documents/artifacts/$(appId)/public/data/workspaces/$(workspaceId);
     }
 
+    function workspaceAccessPath(appId, workspaceId, email) {
+      return /databases/$(database)/documents/artifacts/$(appId)/public/data/workspaceAccess/$(workspaceId + '_' + email);
+    }
+
     function workspaceExists(appId, workspaceId) {
       return exists(workspacePath(appId, workspaceId));
     }
@@ -66,10 +71,22 @@ service cloud.firestore {
       return data.accessKeys is list ? data.accessKeys : [];
     }
 
-    function canReadWorkspace(data) {
+    function hasAcceptedWorkspaceAccess(appId, workspaceId) {
+      let accessPath = workspaceAccessPath(appId, workspaceId, userEmail());
+      return signedIn() &&
+        workspaceId is string &&
+        userEmail() != '' &&
+        exists(accessPath) &&
+        get(accessPath).data.email == userEmail() &&
+        get(accessPath).data.workspaceId == workspaceId &&
+        get(accessPath).data.status == 'accepted';
+    }
+
+    function canReadWorkspace(appId, data) {
       return signedIn() &&
         (
           data.ownerId == request.auth.uid ||
+          hasAcceptedWorkspaceAccess(appId, data.id) ||
           userEmail() in (data.members is list ? data.members : []) ||
           ('uid:' + request.auth.uid) in workspaceAccessKeys(data) ||
           ('email:' + userEmail()) in workspaceAccessKeys(data)
@@ -82,6 +99,7 @@ service cloud.firestore {
         workspaceExists(appId, workspaceId) &&
         (
           workspaceData(appId, workspaceId).ownerId == request.auth.uid ||
+          hasAcceptedWorkspaceAccess(appId, workspaceId) ||
           userEmail() in workspaceMembers(appId, workspaceId) ||
           ('uid:' + request.auth.uid) in workspaceAccessKeys(workspaceData(appId, workspaceId)) ||
           ('email:' + userEmail()) in workspaceAccessKeys(workspaceData(appId, workspaceId))
@@ -155,7 +173,7 @@ service cloud.firestore {
         data.ownerId.size() > 0 &&
         optionalString(data, 'workspaceName', 80) &&
         optionalString(data, 'createdAt', 20) &&
-        optionalString(data, 'status', 20);
+        (!(data.keys().hasAny(['status'])) || data.status in ['pending', 'accepted', 'declined']);
     }
 
     function validTask(data) {
@@ -234,7 +252,7 @@ service cloud.firestore {
     match /artifacts/{appId}/public/data {
       match /workspaces/{workspaceId} {
         allow read: if signedIn() &&
-          canReadWorkspace(resource.data);
+          canReadWorkspace(appId, resource.data);
 
         allow create: if signedIn() &&
           workspaceId != 'default' &&
@@ -276,11 +294,13 @@ service cloud.firestore {
 
         // 초대받은 본인: status 필드만 변경 가능 (수락/거부)
         allow update: if signedIn() &&
+          validWorkspaceAccess(request.resource.data) &&
           resource.data.email == userEmail() &&
           request.resource.data.id == resource.data.id &&
           request.resource.data.workspaceId == resource.data.workspaceId &&
           request.resource.data.email == resource.data.email &&
           request.resource.data.ownerId == resource.data.ownerId &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']) &&
           request.resource.data.status in ['pending', 'accepted', 'declined'];
 
         allow delete: if isWorkspaceOwner(appId, resource.data.workspaceId);

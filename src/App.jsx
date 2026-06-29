@@ -94,15 +94,6 @@ const getWorkspaceEmails = (workspace) => {
   return [...new Set(emails)];
 };
 
-const getUserAccessKeys = (currentUser) => {
-  if (!currentUser) return [];
-  const email = normalizeEmail(currentUser.email);
-  return [
-    currentUser.uid ? `uid:${currentUser.uid}` : '',
-    isEmailLike(email) ? `email:${email}` : ''
-  ].filter(Boolean);
-};
-
 const getWorkspaceAccessKeys = (workspace) => {
   const keys = [
     workspace?.ownerId ? `uid:${workspace.ownerId}` : '',
@@ -125,8 +116,7 @@ const normalizeWorkspaceData = (workspace) => {
 const canAccessWorkspace = (workspace, currentUser) => {
   if (!currentUser) return false;
   if (workspace.ownerId === currentUser.uid) return true;
-  const userAccessKeys = getUserAccessKeys(currentUser);
-  if (userAccessKeys.some(key => workspace.accessKeys?.includes(key))) return true;
+  if (workspace.inviteStatus === 'accepted') return true;
   const userEmail = normalizeEmail(currentUser.email);
   return Boolean(userEmail && getWorkspaceEmails(workspace).includes(userEmail));
 };
@@ -156,16 +146,16 @@ const mergeById = (...lists) => {
   return [...merged.values()];
 };
 
-const getWorkspaceAccessDocId = (workspaceId, email) => `${workspaceId}_${encodeURIComponent(normalizeEmail(email))}`;
+const getWorkspaceAccessDocId = (workspaceId, email) => `${workspaceId}_${normalizeEmail(email)}`;
 
-const createWorkspaceAccessData = (workspace, email) => ({
+const createWorkspaceAccessData = (workspace, email, status = 'pending') => ({
   id: getWorkspaceAccessDocId(workspace.id, email),
   workspaceId: workspace.id,
   workspaceName: workspace.name || '',
   email: normalizeEmail(email),
   ownerId: workspace.ownerId || '',
   createdAt: new Date().toISOString().split('T')[0],
-  status: 'pending'
+  status
 });
 
 const hashString = (value) => {
@@ -656,7 +646,6 @@ export default function App() {
       try {
         const wsRef = collection(db, ...getPath('workspaces'));
         const userEmail = normalizeEmail(user.email);
-        const userAccessKeys = getUserAccessKeys(user);
         const workspaceResults = [];
         const queryErrors = [];
 
@@ -673,10 +662,15 @@ export default function App() {
         if (userEmail) {
           try {
             const accessSnap = await getDocs(query(collection(db, ...getPath('workspaceAccess')), where('email', '==', userEmail)));
-            const accessWorkspaceIds = [...new Set(accessSnap.docs.map(d => d.data().workspaceId).filter(Boolean))];
+            const acceptedInvites = accessSnap.docs
+              .map(d => ({ id: d.id, ...d.data() }))
+              .filter(invite => invite.ownerId !== user.uid && invite.status === 'accepted');
+            const accessWorkspaceIds = [...new Set(acceptedInvites.map(invite => invite.workspaceId).filter(Boolean))];
             const accessWorkspaces = await Promise.all(accessWorkspaceIds.map(async (workspaceId) => {
               const workspaceDoc = await getDoc(doc(db, ...getPath('workspaces'), workspaceId));
-              return workspaceDoc.exists() ? normalizeWorkspaceData({ id: workspaceDoc.id, ...workspaceDoc.data() }) : null;
+              return workspaceDoc.exists()
+                ? normalizeWorkspaceData({ id: workspaceDoc.id, ...workspaceDoc.data(), inviteStatus: 'accepted' })
+                : null;
             }));
             workspaceResults.push(...accessWorkspaces.filter(Boolean));
           } catch (error) {
@@ -718,12 +712,12 @@ export default function App() {
   const syncWorkspaceAccessDocs = async (workspace) => {
     const normalizedWorkspace = normalizeWorkspaceData(workspace);
     await Promise.all(getWorkspaceEmails(normalizedWorkspace).map(async (email) => {
-      const accessData = createWorkspaceAccessData(normalizedWorkspace, email);
+      const accessData = createWorkspaceAccessData(normalizedWorkspace, email, 'accepted');
       const docRef = doc(db, ...getPath('workspaceAccess'), accessData.id);
       const existing = await getDoc(docRef);
-      // 기존 status(수락/거부) 보존 — pending으로 덮어쓰지 않음
+      // 기존 status(수락/거부) 보존 — 멤버 동기화가 초대 상태를 되돌리지 않음
       const finalData = existing.exists()
-        ? { ...accessData, status: existing.data().status ?? 'pending' }
+        ? { ...accessData, status: existing.data().status ?? 'accepted' }
         : accessData;
       return setDoc(docRef, finalData);
     }));
@@ -737,30 +731,32 @@ export default function App() {
     });
   }, [user, myWorkspaces]);
 
-  // 로그인 후 초대 대기 목록 로드
-  useEffect(() => {
-    if (!user?.email) {
+  const loadPendingInvites = useCallback(async () => {
+    if (!user?.email || activeWorkspaceId) {
       setPendingInvites([]);
       setShowInviteNotification(false);
       return;
     }
     const userEmail = normalizeEmail(user.email);
-    const loadInvites = async () => {
-      try {
-        const snap = await getDocs(
-          query(collection(db, ...getPath('workspaceAccess')), where('email', '==', userEmail))
-        );
-        const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-        // 소유자가 아닌 워크스페이스의 pending 항목만 필터
-        const pending = docs.filter(d => d.ownerId !== user.uid && (d.status ?? 'pending') === 'pending');
-        setPendingInvites(pending);
-        if (pending.length > 0) setShowInviteNotification(true);
-      } catch (err) {
-        console.error('초대 목록 로드 실패:', err);
-      }
-    };
-    loadInvites();
-  }, [user]);
+    try {
+      const snap = await getDocs(
+        query(collection(db, ...getPath('workspaceAccess')), where('email', '==', userEmail))
+      );
+      const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const pending = docs.filter(d => d.ownerId !== user.uid && (d.status ?? 'pending') === 'pending');
+      setPendingInvites(pending);
+      setShowInviteNotification(pending.length > 0);
+    } catch (err) {
+      console.error('초대 목록 로드 실패:', err);
+      setPendingInvites([]);
+      setShowInviteNotification(false);
+    }
+  }, [user, activeWorkspaceId]);
+
+  // 워크스페이스 선택 화면에 진입할 때마다 초대 대기 목록 로드
+  useEffect(() => {
+    loadPendingInvites();
+  }, [loadPendingInvites, workspacesRefreshCounter]);
 
   useEffect(() => {
     if (!user || myWorkspaces.length === 0) {
@@ -1118,19 +1114,16 @@ export default function App() {
     if (!email.includes('@')) return showAlert('입력 확인', '올바른 이메일 주소를 입력해주세요.');
     if (getWorkspaceEmails(workspace).includes(email)) return showAlert('중복', '이미 초대된 이메일입니다.');
 
-    const updatedMembers = [...getWorkspaceEmails(workspace), email];
-    const updatedWorkspace = normalizeWorkspaceData({ ...workspace, members: updatedMembers });
-    await saveToFirebase('workspaces', workspace.id, updatedWorkspace);
-
-    // workspaceAccess doc 명시적 생성 (pending 상태)
-    const accessData = createWorkspaceAccessData(updatedWorkspace, email);
+    // 초대 단계에서는 접근 권한을 부여하지 않고, 수락 대기 문서만 생성/갱신한다.
+    const accessData = createWorkspaceAccessData(workspace, email);
     const docRef = doc(db, ...getPath('workspaceAccess'), accessData.id);
     const existing = await getDoc(docRef);
-    if (!existing.exists()) {
-      await setDoc(docRef, accessData);
+    if (existing.exists() && (existing.data().status ?? 'pending') === 'pending') {
+      return showAlert('중복', '이미 초대 대기 중인 이메일입니다.');
     }
+    await setDoc(docRef, accessData);
 
-    setInviteWs(updatedWorkspace);
+    setInviteWs(workspace);
     setInviteEmail('');
     showAlert('초대 완료', `${email} 사용자를 성공적으로 초대했습니다.`);
   };
