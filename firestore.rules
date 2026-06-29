@@ -33,6 +33,7 @@ service cloud.firestore {
     //   - ownerId: string, required, workspace owner uid
     //   - createdAt: string, optional date label
     //   - status: string, optional, one of pending/accepted/declined
+    //   - legacyAccessId: string, optional, previous encoded invite document id used for migration
     //
     // ===============================================================
     // Helper Functions
@@ -53,6 +54,10 @@ service cloud.firestore {
 
     function workspaceAccessPath(appId, workspaceId, email) {
       return /databases/$(database)/documents/artifacts/$(appId)/public/data/workspaceAccess/$(workspaceId + '_' + email);
+    }
+
+    function workspaceAccessDocumentPath(appId, accessId) {
+      return /databases/$(database)/documents/artifacts/$(appId)/public/data/workspaceAccess/$(accessId);
     }
 
     function workspaceExists(appId, workspaceId) {
@@ -80,6 +85,22 @@ service cloud.firestore {
         get(accessPath).data.email == userEmail() &&
         get(accessPath).data.workspaceId == workspaceId &&
         get(accessPath).data.status == 'accepted';
+    }
+
+    function canCreateCanonicalAccessFromLegacy(appId, accessId) {
+      let legacyPath = workspaceAccessDocumentPath(appId, request.resource.data.legacyAccessId);
+      return signedIn() &&
+        request.resource.data.id == accessId &&
+        request.resource.data.id == request.resource.data.workspaceId + '_' + userEmail() &&
+        request.resource.data.email == userEmail() &&
+        request.resource.data.status == 'accepted' &&
+        request.resource.data.legacyAccessId is string &&
+        request.resource.data.legacyAccessId != accessId &&
+        exists(legacyPath) &&
+        get(legacyPath).data.email == userEmail() &&
+        get(legacyPath).data.workspaceId == request.resource.data.workspaceId &&
+        get(legacyPath).data.ownerId == request.resource.data.ownerId &&
+        get(legacyPath).data.status == 'accepted';
     }
 
     function canReadWorkspace(appId, data) {
@@ -158,7 +179,7 @@ service cloud.firestore {
     }
 
     function validWorkspaceAccess(data) {
-      return hasOnly(data, ['id', 'workspaceId', 'workspaceName', 'email', 'ownerId', 'createdAt', 'status']) &&
+      return hasOnly(data, ['id', 'workspaceId', 'workspaceName', 'email', 'ownerId', 'createdAt', 'status', 'legacyAccessId']) &&
         hasRequired(data, ['id', 'workspaceId', 'email', 'ownerId']) &&
         data.id is string &&
         data.id.size() > 0 &&
@@ -173,6 +194,7 @@ service cloud.firestore {
         data.ownerId.size() > 0 &&
         optionalString(data, 'workspaceName', 80) &&
         optionalString(data, 'createdAt', 20) &&
+        optionalString(data, 'legacyAccessId', 220) &&
         (!(data.keys().hasAny(['status'])) || data.status in ['pending', 'accepted', 'declined']);
     }
 
@@ -281,8 +303,13 @@ service cloud.firestore {
         allow create: if validWorkspaceAccess(request.resource.data) &&
           request.resource.data.id == accessId &&
           request.resource.data.email == request.resource.data.email.lower() &&
-          isWorkspaceOwner(appId, request.resource.data.workspaceId) &&
-          request.resource.data.ownerId == request.auth.uid;
+          (
+            (
+              isWorkspaceOwner(appId, request.resource.data.workspaceId) &&
+              request.resource.data.ownerId == request.auth.uid
+            ) ||
+            canCreateCanonicalAccessFromLegacy(appId, accessId)
+          );
 
         // 워크스페이스 소유자: 전체 업데이트 가능
         allow update: if validWorkspaceAccess(request.resource.data) &&

@@ -158,6 +158,17 @@ const createWorkspaceAccessData = (workspace, email, status = 'pending') => ({
   status
 });
 
+const getCanonicalInviteData = (invite, status = invite.status) => ({
+  id: getWorkspaceAccessDocId(invite.workspaceId, invite.email),
+  workspaceId: invite.workspaceId,
+  workspaceName: invite.workspaceName || '',
+  email: normalizeEmail(invite.email),
+  ownerId: invite.ownerId || '',
+  createdAt: invite.createdAt || new Date().toISOString().split('T')[0],
+  status,
+  legacyAccessId: invite.id
+});
+
 const hashString = (value) => {
   const text = value || '미지정';
   let hash = 0;
@@ -619,6 +630,14 @@ export default function App() {
     }
   }, [user, activeWorkspaceId, myWorkspaces, currentMenu]);
 
+  const ensureCanonicalInviteAccess = useCallback(async (invite, status = invite.status) => {
+    if (!invite?.workspaceId || !invite?.email) return;
+    const canonicalId = getWorkspaceAccessDocId(invite.workspaceId, invite.email);
+    if (invite.id === canonicalId) return;
+    const canonicalData = getCanonicalInviteData(invite, status);
+    await setDoc(doc(db, ...getPath('workspaceAccess'), canonicalId), canonicalData);
+  }, []);
+
   useEffect(() => {
     const initAuth = async () => {
       if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
@@ -666,11 +685,17 @@ export default function App() {
               .map(d => ({ id: d.id, ...d.data() }))
               .filter(invite => invite.ownerId !== user.uid && invite.status === 'accepted');
             const accessWorkspaceIds = [...new Set(acceptedInvites.map(invite => invite.workspaceId).filter(Boolean))];
+            await Promise.all(acceptedInvites.map(invite => ensureCanonicalInviteAccess(invite, 'accepted').catch(console.error)));
             const accessWorkspaces = await Promise.all(accessWorkspaceIds.map(async (workspaceId) => {
-              const workspaceDoc = await getDoc(doc(db, ...getPath('workspaces'), workspaceId));
-              return workspaceDoc.exists()
-                ? normalizeWorkspaceData({ id: workspaceDoc.id, ...workspaceDoc.data(), inviteStatus: 'accepted' })
-                : null;
+              try {
+                const workspaceDoc = await getDoc(doc(db, ...getPath('workspaces'), workspaceId));
+                return workspaceDoc.exists()
+                  ? normalizeWorkspaceData({ id: workspaceDoc.id, ...workspaceDoc.data(), inviteStatus: 'accepted' })
+                  : null;
+              } catch (error) {
+                console.error('accepted workspace lookup failed:', workspaceId, error);
+                return null;
+              }
             }));
             workspaceResults.push(...accessWorkspaces.filter(Boolean));
           } catch (error) {
@@ -703,7 +728,7 @@ export default function App() {
 
     loadWorkspaces();
     return () => { cancelled = true; };
-  }, [user, activeWorkspaceId, workspacesRefreshCounter]);
+  }, [user, activeWorkspaceId, workspacesRefreshCounter, ensureCanonicalInviteAccess]);
 
   useEffect(() => {
     loadWorkspaceData();
@@ -1146,6 +1171,7 @@ export default function App() {
     try {
       const docRef = doc(db, ...getPath('workspaceAccess'), invite.id);
       await setDoc(docRef, { status: 'accepted' }, { merge: true });
+      await ensureCanonicalInviteAccess(invite, 'accepted').catch(console.error);
       setPendingInvites(prev => prev.filter(i => i.id !== invite.id));
       // workspacesRefreshCounter 증가 → loadWorkspaces effect 재실행 → 수락된 워크스페이스 로드
       setWorkspacesRefreshCounter(c => c + 1);
