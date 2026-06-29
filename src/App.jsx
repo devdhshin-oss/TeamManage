@@ -1984,6 +1984,67 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {/* 초대 알림 모달 - 워크스페이스 선택 화면에서도 표출 */}
+        {showInviteNotification && pendingInvites.length > 0 && (
+          <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4 z-[110]">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
+              <div className="bg-gradient-to-r from-indigo-600 to-purple-600 p-6 text-white">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
+                      <Mail className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-lg">워크스페이스 초대</h3>
+                      <p className="text-indigo-200 text-xs mt-0.5">새로운 초대가 {pendingInvites.length}건 도착했습니다</p>
+                    </div>
+                  </div>
+                  <button onClick={() => setShowInviteNotification(false)} className="w-8 h-8 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center transition-colors">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+              <div className="p-6 space-y-3 max-h-80 overflow-y-auto">
+                {pendingInvites.map((invite) => (
+                  <div key={invite.id} className="border border-slate-200 rounded-xl p-4 bg-slate-50 hover:bg-indigo-50/50 transition-colors">
+                    <div className="flex items-start gap-3">
+                      <div className="w-10 h-10 bg-indigo-100 rounded-xl flex items-center justify-center flex-shrink-0">
+                        <Building className="w-5 h-5 text-indigo-600" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-bold text-slate-800 truncate">{invite.workspaceName || '워크스페이스'}</p>
+                        <p className="text-xs text-slate-500 mt-0.5">초대일: {invite.createdAt || '—'}</p>
+                        <div className="flex gap-2 mt-3">
+                          <button
+                            onClick={() => { handleAcceptInvite(invite); if (pendingInvites.filter(i => i.id !== invite.id).length === 0) setShowInviteNotification(false); }}
+                            className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold py-2 rounded-lg transition-colors flex items-center justify-center gap-1"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" /> 수락
+                          </button>
+                          <button
+                            onClick={() => { handleDeclineInvite(invite); if (pendingInvites.filter(i => i.id !== invite.id).length === 0) setShowInviteNotification(false); }}
+                            className="flex-1 bg-slate-200 hover:bg-red-100 text-slate-700 hover:text-red-600 text-xs font-bold py-2 rounded-lg transition-colors flex items-center justify-center gap-1"
+                          >
+                            <X className="w-3.5 h-3.5" /> 거부
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="px-6 pb-6">
+                <button
+                  onClick={() => setShowInviteNotification(false)}
+                  className="w-full py-2.5 text-slate-500 hover:text-slate-700 text-sm font-bold border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors"
+                >
+                  나중에 결정하기
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
