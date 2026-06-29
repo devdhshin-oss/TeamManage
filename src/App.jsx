@@ -1114,18 +1114,19 @@ export default function App() {
     if (!email.includes('@')) return showAlert('입력 확인', '올바른 이메일 주소를 입력해주세요.');
     if (getWorkspaceEmails(workspace).includes(email)) return showAlert('중복', '이미 초대된 이메일입니다.');
 
-    // 초대 단계에서는 접근 권한을 부여하지 않고, 수락 대기 문서만 생성/갱신한다.
-    const accessData = createWorkspaceAccessData(workspace, email);
-    const docRef = doc(db, ...getPath('workspaceAccess'), accessData.id);
-    const existing = await getDoc(docRef);
-    if (existing.exists() && (existing.data().status ?? 'pending') === 'pending') {
-      return showAlert('중복', '이미 초대 대기 중인 이메일입니다.');
-    }
-    await setDoc(docRef, accessData);
+    try {
+      // 초대 단계에서는 접근 권한을 부여하지 않고, 수락 대기 문서만 생성/갱신한다.
+      const accessData = createWorkspaceAccessData(workspace, email);
+      const docRef = doc(db, ...getPath('workspaceAccess'), accessData.id);
+      await setDoc(docRef, accessData);
 
-    setInviteWs(workspace);
-    setInviteEmail('');
-    showAlert('초대 완료', `${email} 사용자를 성공적으로 초대했습니다.`);
+      setInviteWs(workspace);
+      setInviteEmail('');
+      showAlert('초대 완료', `${email} 사용자를 성공적으로 초대했습니다.`);
+    } catch (err) {
+      console.error('초대 생성 실패:', err);
+      showAlert('초대 실패', `초대 정보를 저장하지 못했습니다. (${err.message || err})`);
+    }
   };
 
   const handleRemoveMember = async (emailToRemove, workspace = inviteWs) => {
