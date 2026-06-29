@@ -384,6 +384,7 @@ export default function App() {
       setSearchQuery('');
       setActiveTab('in-progress');
       setExpandedDepartments({});
+      setSelectedEvalMember(null);
     }
   };
   const activeWorkspaceId = activeWorkspaceIdState;
@@ -395,6 +396,14 @@ export default function App() {
   }, [allWorkspaces, user]);
   const currentWorkspace = useMemo(() => allWorkspaces.find(w => w.id === activeWorkspaceId) || null, [allWorkspaces, activeWorkspaceId]);
   const isCurrentWorkspaceOwner = Boolean(user && currentWorkspace?.ownerId === user.uid);
+  const isAdmin = useMemo(() => {
+    if (!user) return false;
+    if (isCurrentWorkspaceOwner) return true;
+    if (!user.email) return false;
+    const userEmail = normalizeEmail(user.email);
+    const matchedMember = allMembers.find(m => normalizeEmail(m.email) === userEmail && m.workspaceId === activeWorkspaceId);
+    return !!matchedMember?.isAdmin;
+  }, [allMembers, user, isCurrentWorkspaceOwner, activeWorkspaceId]);
 
   useEffect(() => {
     if (!user || myWorkspaces.length === 0 || !activeWorkspaceId) return;
@@ -407,7 +416,10 @@ export default function App() {
     if (activeWorkspaceId && OWNER_ONLY_MENUS.includes(currentMenu) && !isCurrentWorkspaceOwner) {
       setCurrentMenu('tasks');
     }
-  }, [activeWorkspaceId, currentMenu, isCurrentWorkspaceOwner]);
+    if (activeWorkspaceId && currentMenu === 'eval' && !isAdmin) {
+      setCurrentMenu('tasks');
+    }
+  }, [activeWorkspaceId, currentMenu, isCurrentWorkspaceOwner, isAdmin]);
 
   // 현재 워크스페이스 기준으로 필터링된 데이터
   const tasks = useMemo(() => allTasks.filter(t => t.workspaceId === activeWorkspaceId), [allTasks, activeWorkspaceId]);
@@ -429,6 +441,52 @@ export default function App() {
       ...prev,
       [deptId]: !prev[deptId]
     }));
+  };
+
+  const [memberSortField, setMemberSortField] = useState('name');
+  const [memberSortDirection, setMemberSortDirection] = useState('asc');
+
+  const handleSort = (field) => {
+    if (memberSortField === field) {
+      setMemberSortDirection(prev => prev === 'asc' ? 'desc' : 'asc');
+    } else {
+      setMemberSortField(field);
+      setMemberSortDirection('asc');
+    }
+  };
+
+  const [selectedEvalMember, setSelectedEvalMember] = useState(null);
+  const [evalFormData, setEvalFormData] = useState({ grade: '', feedback: '' });
+  const [allEvaluations, setAllEvaluations] = useState([]);
+
+  const handleSelectEvalMember = (member) => {
+    setSelectedEvalMember(member);
+    const existingEval = allEvaluations.find(e => e.memberId === member.id);
+    if (existingEval) {
+      setEvalFormData({ grade: existingEval.grade || '', feedback: existingEval.feedback || '' });
+    } else {
+      setEvalFormData({ grade: '', feedback: '' });
+    }
+  };
+
+  const handleEvalSubmit = async (e) => {
+    e.preventDefault();
+    if (!isAdmin) return showAlert('권한 없음', '관리자만 평가를 작성할 수 있습니다.');
+    if (!selectedEvalMember) return;
+    
+    const evalId = `eval_${selectedEvalMember.id}`;
+    const evalData = {
+      id: evalId,
+      workspaceId: activeWorkspaceId,
+      memberId: selectedEvalMember.id,
+      grade: evalFormData.grade,
+      feedback: evalFormData.feedback,
+      evaluator: user.email || '관리자',
+      updatedAt: new Date().toISOString()
+    };
+    
+    await saveToFirebase('evaluations', evalId, evalData);
+    showAlert('저장 완료', '인사 평가가 성공적으로 저장되었습니다.');
   };
 
   // 캘린더 상태
@@ -461,7 +519,7 @@ export default function App() {
 
   const [editingMember, setEditingMember] = useState(null);
   const [memberFormData, setMemberFormData] = useState({
-    name: '', rank: '사원', departmentId: '', role: '', joinDate: '', promotionDate: '', birthday: '', email: '', phone: '', annualLeaveBase: ''
+    name: '', rank: '사원', departmentId: '', role: '', joinDate: '', promotionDate: '', birthday: '', email: '', phone: '', annualLeaveBase: '', isAdmin: false
   });
 
   const [orgFormData, setOrgFormData] = useState({ name: '', parentId: null });
@@ -512,6 +570,7 @@ export default function App() {
     if (colName === 'members') setAllMembers(update);
     if (colName === 'departments') setAllDepartments(update);
     if (colName === 'projects') setAllProjects(update);
+    if (colName === 'evaluations') setAllEvaluations(update);
     if (colName === 'workspaces') {
       const normalizedWorkspace = data ? normalizeWorkspaceData({ ...data, id }) : null;
       setAllWorkspaces(prev => action === 'delete'
@@ -527,6 +586,7 @@ export default function App() {
       setAllMembers([]);
       setAllDepartments([]);
       setAllProjects([]);
+      setAllEvaluations([]);
       return;
     }
 
@@ -534,9 +594,12 @@ export default function App() {
     try {
       const collectionsToLoad = new Set(['tasks', 'projects']);
       if (currentMenu === 'calendar') collectionsToLoad.add('members');
-      if (currentMenu === 'members' || currentMenu === 'org') {
+      if (currentMenu === 'members' || currentMenu === 'org' || currentMenu === 'eval') {
         collectionsToLoad.add('members');
         collectionsToLoad.add('departments');
+      }
+      if (currentMenu === 'eval') {
+        collectionsToLoad.add('evaluations');
       }
 
       const loads = await Promise.all([...collectionsToLoad].map(async (colName) => [colName, docsFromSnapshot(await getDocs(scopedQuery(colName)))]));
@@ -545,6 +608,7 @@ export default function App() {
         if (colName === 'members') setAllMembers(docs);
         if (colName === 'departments') setAllDepartments(docs);
         if (colName === 'projects') setAllProjects(docs);
+        if (colName === 'evaluations') setAllEvaluations(docs);
       });
     } catch (err) {
       console.error(err);
@@ -1277,12 +1341,53 @@ export default function App() {
   const membersByDepartment = useMemo(() => {
     const departmentOrder = [...departments, { id: '__none__', name: '소속없음' }];
     return departmentOrder
-      .map(dept => ({
-        dept,
-        members: filteredMembers.filter(member => (member.departmentId || '__none__') === dept.id)
-      }))
+      .map(dept => {
+        const deptMembers = filteredMembers.filter(member => (member.departmentId || '__none__') === dept.id);
+        
+        deptMembers.sort((a, b) => {
+          let valA = '';
+          let valB = '';
+          
+          if (memberSortField === 'joinDate') {
+            valA = a.joinDate || '9999-12-31';
+            valB = b.joinDate || '9999-12-31';
+          } else if (memberSortField === 'promotionDate') {
+            valA = a.promotionDate || '9999-12-31';
+            valB = b.promotionDate || '9999-12-31';
+          } else if (memberSortField === 'nextPromotionDate') {
+            const nextA = calculateNextPromotionDate(a.rank, a.joinDate, a.promotionDate) || '9999-12-31';
+            const nextB = calculateNextPromotionDate(b.rank, b.joinDate, b.promotionDate) || '9999-12-31';
+            valA = nextA;
+            valB = nextB;
+          } else if (memberSortField === 'birthday' || memberSortField === 'age') {
+            valA = a.birthday || '9999-12-31';
+            valB = b.birthday || '9999-12-31';
+            if (memberSortField === 'age') {
+              const temp = valA;
+              valA = valB;
+              valB = temp;
+            }
+          } else {
+            valA = a.name || '';
+            valB = b.name || '';
+            return memberSortDirection === 'asc' 
+              ? valA.localeCompare(valB) 
+              : valB.localeCompare(valA);
+          }
+          
+          if (valA === valB) return 0;
+          return memberSortDirection === 'asc'
+            ? valA.localeCompare(valB)
+            : valB.localeCompare(valA);
+        });
+
+        return {
+          dept,
+          members: deptMembers
+        };
+      })
       .filter(group => group.members.length > 0);
-  }, [departments, filteredMembers]);
+  }, [departments, filteredMembers, memberSortField, memberSortDirection]);
   const urgentTasks = useMemo(() => tasks.filter(t => {
     const dDay = calculateDDay(t.targetDate, t.status);
     return dDay && dDay.isUrgent;
@@ -1793,6 +1898,9 @@ export default function App() {
                 <button onClick={() => setCurrentMenu('workspaces')} className={`px-3 py-1.5 rounded-lg text-sm font-bold flex items-center gap-2 ${currentMenu === 'workspaces' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-100'}`}><Key className="w-4 h-4" /> 권한 설정</button>
               </>
             )}
+            {isAdmin && (
+              <button onClick={() => setCurrentMenu('eval')} className={`px-3 py-1.5 rounded-lg text-sm font-bold flex items-center gap-2 ${currentMenu === 'eval' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-100'}`}><Award className="w-4 h-4" /> 평가 관리</button>
+            )}
           </div>
         </div>
 
@@ -1805,6 +1913,7 @@ export default function App() {
               {isCurrentWorkspaceOwner && <option value="members">팀원</option>}
               {isCurrentWorkspaceOwner && <option value="org">조직</option>}
               {isCurrentWorkspaceOwner && <option value="workspaces">권한 설정</option>}
+              {isAdmin && <option value="eval">평가 관리</option>}
             </select>
           </div>
           <div className="relative">
@@ -2108,15 +2217,27 @@ export default function App() {
                     </div>
                     {isExpanded && (
                       <div className="overflow-x-auto">
-                        <table className="w-full text-sm min-w-[900px]">
-                          <thead className="bg-white border-b border-slate-100 text-xs text-slate-500">
+                        <table className="w-full text-sm min-w-[1000px]">
+                          <thead className="bg-white border-b border-slate-100 text-xs text-slate-500 select-none">
                             <tr>
-                              <th className="text-left px-4 py-3 font-bold">이름</th>
+                              <th onClick={() => handleSort('name')} className="text-left px-4 py-3 font-bold cursor-pointer hover:bg-slate-50 transition-colors">
+                                <div className="flex items-center gap-1">이름 <ArrowUpDown className={`w-3 h-3 ${memberSortField === 'name' ? 'text-indigo-600' : 'text-slate-300'}`} /></div>
+                              </th>
                               <th className="text-left px-4 py-3 font-bold">직급</th>
                               <th className="text-left px-4 py-3 font-bold">소속부서</th>
                               <th className="text-left px-4 py-3 font-bold">직무</th>
-                              <th className="text-left px-4 py-3 font-bold">다음진급일</th>
-                              <th className="text-right px-4 py-3 font-bold">나이</th>
+                              <th onClick={() => handleSort('joinDate')} className="text-left px-4 py-3 font-bold cursor-pointer hover:bg-slate-50 transition-colors">
+                                <div className="flex items-center gap-1">입사일 <ArrowUpDown className={`w-3 h-3 ${memberSortField === 'joinDate' ? 'text-indigo-600' : 'text-slate-300'}`} /></div>
+                              </th>
+                              <th onClick={() => handleSort('promotionDate')} className="text-left px-4 py-3 font-bold cursor-pointer hover:bg-slate-50 transition-colors">
+                                <div className="flex items-center gap-1">최근진급일 <ArrowUpDown className={`w-3 h-3 ${memberSortField === 'promotionDate' ? 'text-indigo-600' : 'text-slate-300'}`} /></div>
+                              </th>
+                              <th onClick={() => handleSort('nextPromotionDate')} className="text-left px-4 py-3 font-bold cursor-pointer hover:bg-slate-50 transition-colors">
+                                <div className="flex items-center gap-1">다음진급일 <ArrowUpDown className={`w-3 h-3 ${memberSortField === 'nextPromotionDate' ? 'text-indigo-600' : 'text-slate-300'}`} /></div>
+                              </th>
+                              <th onClick={() => handleSort('age')} className="text-right px-4 py-3 font-bold cursor-pointer hover:bg-slate-50 transition-colors">
+                                <div className="flex items-center gap-1 justify-end">나이(생일) <ArrowUpDown className={`w-3 h-3 ${memberSortField === 'age' ? 'text-indigo-600' : 'text-slate-300'}`} /></div>
+                              </th>
                               <th className="text-right px-4 py-3 font-bold">잔여연차</th>
                               <th className="text-right px-4 py-3 font-bold">관리</th>
                             </tr>
@@ -2129,18 +2250,25 @@ export default function App() {
                               const usedAnnualLeave = getUsedAnnualLeaveDays(m, annualLeaveEvents);
                               const remainingAnnualLeave = annualLeaveBase - usedAnnualLeave;
                               return (
-                                <tr key={m.id} onDoubleClick={() => handleOpenMemberModal(m)} className="border-b border-slate-50 hover:bg-indigo-50/30 transition-colors">
+                                <tr key={m.id} onDoubleClick={() => handleOpenMemberModal(m)} className="border-b border-slate-50 hover:bg-indigo-50/30 transition-colors text-xs sm:text-sm">
                                   <td className="px-4 py-3">
                                     <button onClick={() => handleOpenMemberModal(m)} className="font-bold text-slate-800 hover:text-indigo-700 flex items-center gap-2">
                                       <span className="w-7 h-7 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center text-xs font-black">{(m.name || '유').substring(0, 1)}</span>
-                                      {m.name || '-'}
+                                      <span className="flex items-center gap-1.5">
+                                        {m.name || '-'}
+                                        {m.isAdmin && <span className="text-[10px] bg-red-50 text-red-600 border border-red-100 font-bold px-1.5 py-0.5 rounded-md">관리자</span>}
+                                      </span>
                                     </button>
                                   </td>
                                   <td className="px-4 py-3 font-semibold text-slate-600">{m.rank || '-'}</td>
                                   <td className="px-4 py-3 text-slate-600">{dept.name}</td>
                                   <td className="px-4 py-3 text-slate-600">{m.role || '-'}</td>
+                                  <td className="px-4 py-3 text-slate-600">{m.joinDate ? formatDateLabel(m.joinDate) : '-'}</td>
+                                  <td className="px-4 py-3 text-slate-600">{m.promotionDate ? formatDateLabel(m.promotionDate) : '-'}</td>
                                   <td className="px-4 py-3 font-semibold text-indigo-700">{formatDateLabel(nextPromotionDate)}</td>
-                                  <td className="px-4 py-3 text-right font-semibold text-slate-700">{age ? `${age}세` : '-'}</td>
+                                  <td className="px-4 py-3 text-right font-semibold text-slate-700">
+                                    {age ? `${age}세` : '-'} {m.birthday ? `(${formatDateLabel(m.birthday)})` : ''}
+                                  </td>
                                   <td className={`px-4 py-3 text-right font-black ${remainingAnnualLeave < 0 ? 'text-red-600' : 'text-emerald-700'}`}>{formatLeaveDays(remainingAnnualLeave)}</td>
                                   <td className="px-4 py-3 text-right">
                                     <button onClick={() => handleOpenMemberModal(m)} className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 text-slate-500 hover:text-indigo-700 hover:bg-indigo-50 hover:border-indigo-200 text-xs font-bold">
@@ -2175,6 +2303,133 @@ export default function App() {
             </header>
             <div className="bg-white rounded-2xl border border-slate-200 p-8 shadow-sm">
               {departments.length === 0 ? <div className="text-center py-10 text-slate-500">등록된 부서가 없습니다.</div> : renderOrganizationTree(null, 0)}
+            </div>
+          </div>
+        )}
+
+        {/* 평가 관리 탭 */}
+        {currentMenu === 'eval' && isAdmin && (
+          <div>
+            <header className="mb-6">
+              <h1 className="text-2xl font-bold flex items-center gap-2">
+                <Award className="text-indigo-600 w-7 h-7" /> 인사 평가 관리
+              </h1>
+              <p className="text-sm text-slate-500 mt-2">팀원들의 성과 등급과 피드백을 관리합니다. (관리자 전용 메뉴)</p>
+            </header>
+            
+            <div className="grid grid-cols-1 lg:grid-cols-[300px_1fr] gap-6">
+              {/* 좌측: 팀원 목록 */}
+              <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-sm h-[calc(100vh-250px)] overflow-y-auto">
+                <h3 className="font-bold text-slate-700 mb-3 px-1 text-sm">평가 대상 팀원</h3>
+                <div className="space-y-1">
+                  {members.map(m => {
+                    const dept = departments.find(d => d.id === m.departmentId);
+                    const isSelected = selectedEvalMember?.id === m.id;
+                    const memberEval = allEvaluations.find(e => e.memberId === m.id);
+                    return (
+                      <button
+                        key={m.id}
+                        onClick={() => handleSelectEvalMember(m)}
+                        className={`w-full text-left p-3 rounded-xl border transition-all flex items-center justify-between ${
+                          isSelected 
+                            ? 'bg-indigo-50 border-indigo-200 text-indigo-700' 
+                            : 'border-slate-100 hover:bg-slate-50 text-slate-700'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <span className="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center text-xs font-black">
+                            {(m.name || '유').substring(0, 1)}
+                          </span>
+                          <div>
+                            <span className="font-bold block text-sm">{m.name} {m.rank}</span>
+                            <span className="text-xs text-slate-400 block">{dept?.name || '소속없음'}</span>
+                          </div>
+                        </div>
+                        {memberEval?.grade && (
+                          <span className="text-xs font-black bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full border border-indigo-200">
+                            {memberEval.grade} 등급
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                  {members.length === 0 && (
+                    <div className="text-center py-10 text-slate-400 text-sm">등록된 팀원이 없습니다.</div>
+                  )}
+                </div>
+              </div>
+
+              {/* 우측: 평가 작성 및 조회 */}
+              <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm min-h-[400px]">
+                {selectedEvalMember ? (
+                  <form onSubmit={handleEvalSubmit} className="space-y-6">
+                    <div className="border-b border-slate-100 pb-4 flex justify-between items-center">
+                      <div>
+                        <h2 className="text-lg font-black text-slate-800">{selectedEvalMember.name} {selectedEvalMember.rank}</h2>
+                        <p className="text-xs text-slate-400 mt-1">{selectedEvalMember.role || '직무 미지정'}</p>
+                      </div>
+                      <span className="text-xs font-bold text-slate-500 bg-slate-100 rounded-full px-3 py-1">
+                        입사일: {selectedEvalMember.joinDate || '미정'}
+                      </span>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-bold text-slate-700 mb-2">평가 등급</label>
+                      <div className="flex gap-2">
+                        {['S', 'A', 'B', 'C', 'D'].map(g => (
+                          <button
+                            key={g}
+                            type="button"
+                            onClick={() => setEvalFormData({ ...evalFormData, grade: g })}
+                            className={`flex-1 py-3 rounded-xl border text-sm font-black transition-all ${
+                              evalFormData.grade === g 
+                                ? 'bg-indigo-600 border-indigo-600 text-white shadow-md shadow-indigo-100' 
+                                : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
+                            }`}
+                          >
+                            {g}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-bold text-slate-700 mb-2">성과 피드백</label>
+                      <textarea
+                        value={evalFormData.feedback || ''}
+                        onChange={e => setEvalFormData({ ...evalFormData, feedback: e.target.value })}
+                        placeholder="이 팀원의 성과와 역량에 대한 구체적인 피드백을 입력해주세요."
+                        className="w-full px-4 py-3 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-indigo-500 min-h-[150px]"
+                        required
+                      />
+                    </div>
+
+                    <div className="flex justify-end gap-2 pt-4 border-t border-slate-100">
+                      <button 
+                        type="button" 
+                        onClick={() => {
+                          setSelectedEvalMember(null);
+                          setEvalFormData({ grade: '', feedback: '' });
+                        }}
+                        className="px-5 py-2.5 border border-slate-200 rounded-xl text-sm font-bold bg-white text-slate-500 hover:bg-slate-50"
+                      >
+                        취소
+                      </button>
+                      <button 
+                        type="submit" 
+                        className="px-5 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-bold hover:bg-indigo-700 shadow-md shadow-indigo-100"
+                      >
+                        평가 저장
+                      </button>
+                    </div>
+                  </form>
+                ) : (
+                  <div className="flex flex-col items-center justify-center py-20 text-slate-400">
+                    <Award className="w-12 h-12 text-slate-300 mb-3" />
+                    <p className="text-sm font-bold">평가할 팀원을 선택해주세요.</p>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}
@@ -2260,6 +2515,22 @@ export default function App() {
                   </span>
                 </div>
                 <div className="col-span-2"><label className="block text-sm font-bold mb-1">생일</label><input type="date" value={memberFormData.birthday || ''} onChange={e => setMemberFormData({ ...memberFormData, birthday: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
+                <div><label className="block text-sm font-bold mb-1">이메일</label><input type="email" value={memberFormData.email || ''} onChange={e => setMemberFormData({ ...memberFormData, email: e.target.value })} placeholder="예: user@example.com" className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
+                <div><label className="block text-sm font-bold mb-1">연차 입력</label><input type="number" step="0.5" value={memberFormData.annualLeaveBase ?? ''} onChange={e => setMemberFormData({ ...memberFormData, annualLeaveBase: e.target.value })} placeholder={String(calculateStatutoryAnnualLeave(memberFormData.joinDate))} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
+                <div className="bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2.5 col-span-2">
+                  <span className="block text-xs font-bold text-emerald-500 mb-1">기준 부여 연차</span>
+                  <span className="text-sm font-black text-emerald-800">{formatLeaveDays(getAnnualLeaveBase(memberFormData))}</span>
+                </div>
+                <div className="flex items-center gap-2 px-1 col-span-2 mt-2">
+                  <input 
+                    type="checkbox" 
+                    id="memberIsAdmin"
+                    checked={!!memberFormData.isAdmin} 
+                    onChange={e => setMemberFormData({ ...memberFormData, isAdmin: e.target.checked })} 
+                    className="w-4 h-4 text-indigo-600 border-slate-300 rounded focus:ring-indigo-500" 
+                  />
+                  <label htmlFor="memberIsAdmin" className="text-sm font-bold text-slate-700 cursor-pointer select-none">관리자 권한 부여</label>
+                </div>
               </div>
             </div>
             <div className="p-4 border-t bg-slate-50 flex justify-between rounded-b-2xl">{editingMember ? <button onClick={() => deleteMember(editingMember.id)} className="text-red-500 font-bold px-2 text-sm">삭제</button> : <div></div>}<div className="flex gap-2"><button onClick={() => setIsMemberModalOpen(false)} className="px-4 py-2 border rounded-lg text-sm font-bold bg-white">취소</button><button onClick={handleMemberSubmit} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-bold">저장</button></div></div>
