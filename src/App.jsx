@@ -1,9 +1,9 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { 
+import {
   Plus, AlertCircle, CheckCircle2, Clock, User, Search, X, MessageSquareWarning,
   ListTodo, Trash2, CheckSquare, Square, GripVertical, LayoutDashboard, ListFilter,
-  Users, Briefcase, Calendar, Award, Cake, Mail, Phone, Edit2, Key, Bell, Sparkles, 
-  MessageSquare, ChevronRight, Building2, Network, Save, Upload, Database, CalendarDays, 
+  Users, Briefcase, Calendar, Award, Cake, Mail, Phone, Edit2, Key, Bell, Sparkles,
+  MessageSquare, ChevronRight, ChevronDown, Building2, Network, Save, Upload, Database, CalendarDays,
   ChevronLeft, ArrowUpDown, FolderOpen, LogOut, UserPlus, LogIn, Folder, Tag, Grid, PlusCircle,
   Home, LayoutGrid, FolderKanban, Share2, Building
 } from 'lucide-react';
@@ -11,10 +11,10 @@ import {
 // --- Firebase SDK Imports ---
 import { initializeApp } from 'firebase/app';
 import { getFirestore, collection, getDocs, getDoc, doc, setDoc, deleteDoc, query, where } from 'firebase/firestore';
-import { 
+import {
   getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken,
   createUserWithEmailAndPassword, signInWithEmailAndPassword,
-  signInWithPopup, GoogleAuthProvider, signOut 
+  signInWithPopup, GoogleAuthProvider, signOut
 } from 'firebase/auth';
 
 // ============================================================================
@@ -328,7 +328,7 @@ const calculateNextPromotionDate = (rank, joinDate, promotionDate) => {
     }
     targetDate = new Date(nextYear, 3, 1);
   }
-  
+
   const yyyy = targetDate.getFullYear();
   const mm = String(targetDate.getMonth() + 1).padStart(2, '0');
   const dd = String(targetDate.getDate()).padStart(2, '0');
@@ -347,10 +347,10 @@ const calculateDDay = (targetDate, status) => {
   today.setHours(0, 0, 0, 0);
   const target = new Date(targetDate);
   target.setHours(0, 0, 0, 0);
-  
+
   const diffTime = target - today;
   const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-  
+
   if (diffDays < 0) return { label: `지연됨 (D+${Math.abs(diffDays)})`, color: 'bg-red-100 text-red-700', isUrgent: true };
   if (diffDays === 0) return { label: '오늘 마감', color: 'bg-orange-100 text-orange-700', isUrgent: true };
   if (diffDays <= 3) return { label: `D-${diffDays}`, color: 'bg-amber-100 text-amber-700', isUrgent: true };
@@ -364,7 +364,7 @@ export default function App() {
   const [authForm, setAuthForm] = useState(() => ({ email: getLastAuthEmail(), password: '' }));
 
   const [currentMenu, setCurrentMenu] = useState('tasks');
-  
+
   // 클라우드 전체 데이터
   const [allTasks, setAllTasks] = useState([]);
   const [allMembers, setAllMembers] = useState([]);
@@ -372,17 +372,18 @@ export default function App() {
   const [allWorkspaces, setAllWorkspaces] = useState([]);
   const [allProjects, setAllProjects] = useState([]);
   const [workspaceStats, setWorkspaceStats] = useState({});
-  
+
   // 현재 선택된 워크스페이스
   const [activeWorkspaceIdState, setActiveWorkspaceIdState] = useState(null);
-  
+
   const setActiveWorkspaceId = (id) => {
     setActiveWorkspaceIdState(id);
     if (id) {
-      setCurrentMenu('tasks'); 
+      setCurrentMenu('tasks');
       setSelectedProjectFilter('all');
       setSearchQuery('');
       setActiveTab('in-progress');
+      setExpandedDepartments({});
     }
   };
   const activeWorkspaceId = activeWorkspaceIdState;
@@ -421,7 +422,15 @@ export default function App() {
   const [activeTab, setActiveTab] = useState('in-progress');
   const [taskSortOption, setTaskSortOption] = useState('default');
   const [selectedProjectFilter, setSelectedProjectFilter] = useState('all');
-  
+  const [expandedDepartments, setExpandedDepartments] = useState({});
+
+  const toggleDepartment = (deptId) => {
+    setExpandedDepartments(prev => ({
+      ...prev,
+      [deptId]: !prev[deptId]
+    }));
+  };
+
   // 캘린더 상태
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [calendarFilterAssignee, setCalendarFilterAssignee] = useState('all');
@@ -454,13 +463,13 @@ export default function App() {
   const [memberFormData, setMemberFormData] = useState({
     name: '', rank: '사원', departmentId: '', role: '', joinDate: '', promotionDate: '', birthday: '', email: '', phone: '', annualLeaveBase: ''
   });
-  
+
   const [orgFormData, setOrgFormData] = useState({ name: '', parentId: null });
   const [projectFormData, setProjectFormData] = useState({ id: '', name: '', color: 'indigo' });
-  
+
   const [editingWs, setEditingWs] = useState(null);
   const [wsFormData, setWsFormData] = useState({ name: '', description: '' });
-  
+
   // 워크스페이스 초대 관련
   const [inviteWs, setInviteWs] = useState(null);
   const [inviteEmail, setInviteEmail] = useState('');
@@ -550,7 +559,7 @@ export default function App() {
       }
     };
     initAuth();
-    
+
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       if (currentUser?.email) saveLastAuthEmail(currentUser.email);
       setUser(currentUser);
@@ -777,7 +786,7 @@ export default function App() {
       showAlert('API 키 필요', '우측 상단의 열쇠(🔑) 아이콘을 눌러 Gemini API 키를 먼저 등록해주세요.');
       return null;
     }
-    
+
     setIsAiLoading(true);
     const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`;
     const payload = { contents: [{ parts: [{ text: prompt }] }] };
@@ -813,7 +822,7 @@ export default function App() {
     [현재 진행 중이거나 예정된 주요 업무 리스트]
     ${activeTasks.map(t => `- [담당: ${t.assignee}] ${t.title} (기한: ${t.targetDate || '미정'}) ${t.hasIssue ? '🚨(이슈 있음)' : ''}`).join('\n')}
     이 내용을 바탕으로 팀원들을 격려하고, 마감이 임박한 업무나 이슈가 있는 업무를 짚어주는 3~4문단의 짧고 활기찬 브리핑(적절한 이모지 포함)을 작성해주세요.`;
-    
+
     const result = await callGeminiAPI(prompt);
     if (result) showAlert('✨ 팀 일일 브리핑', result, true);
   };
@@ -858,7 +867,7 @@ export default function App() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `TeamSpace_Backup_${new Date().toISOString().slice(0,10)}.json`;
+    a.download = `TeamSpace_Backup_${new Date().toISOString().slice(0, 10)}.json`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
@@ -877,7 +886,7 @@ export default function App() {
         if (parsedData.tasks && parsedData.members && parsedData.departments) {
           showConfirm('데이터 업로드(복원)', '파일의 데이터를 클라우드 데이터베이스에 모두 업로드하시겠습니까?\n이 데이터는 즉시 덮어씌워지며 모두에게 공유됩니다.', async () => {
             setIsDataModalOpen(false);
-            setIsAiLoading(true); 
+            setIsAiLoading(true);
             for (const ws of parsedData.workspaces || []) await saveToFirebase('workspaces', ws.id, ws);
             for (const p of parsedData.projects || []) await saveToFirebase('projects', p.id, p);
             for (const t of parsedData.tasks) await saveToFirebase('tasks', t.id, t);
@@ -894,7 +903,7 @@ export default function App() {
       }
     };
     reader.readAsText(file);
-    e.target.value = ''; 
+    e.target.value = '';
   };
 
   const persistGoogleCalendarConfig = (nextConfig) => {
@@ -984,17 +993,17 @@ export default function App() {
     if (!wsFormData.name.trim()) return;
     const wsId = editingWs ? editingWs.id : `ws_${Date.now()}`;
     const ownerEmail = normalizeEmail(user.email);
-    const wsData = editingWs 
+    const wsData = editingWs
       ? { ...editingWs, name: wsFormData.name, description: wsFormData.description }
-      : { 
-          id: wsId, 
-          name: wsFormData.name, 
-          description: wsFormData.description,
-          ownerId: user.uid, 
-          ownerEmail,
-          members: ownerEmail ? [ownerEmail] : [] 
-        };
-        
+      : {
+        id: wsId,
+        name: wsFormData.name,
+        description: wsFormData.description,
+        ownerId: user.uid,
+        ownerEmail,
+        members: ownerEmail ? [ownerEmail] : []
+      };
+
     setIsWsModalOpen(false);
     await saveToFirebase('workspaces', wsId, wsData);
     if (!editingWs && !activeWorkspaceId) {
@@ -1011,7 +1020,7 @@ export default function App() {
       allProjects.filter(p => p.workspaceId === id).forEach(p => deleteFromFirebase('projects', p.id));
       allMembers.filter(m => m.workspaceId === id).forEach(m => deleteFromFirebase('members', m.id));
       allDepartments.filter(d => d.workspaceId === id).forEach(d => deleteFromFirebase('departments', d.id));
-      
+
       await deleteFromFirebase('workspaces', id);
       if (activeWorkspaceId === id) setActiveWorkspaceId(null);
     });
@@ -1032,11 +1041,11 @@ export default function App() {
     if (!email) return;
     if (!email.includes('@')) return showAlert('입력 확인', '올바른 이메일 주소를 입력해주세요.');
     if (getWorkspaceEmails(workspace).includes(email)) return showAlert('중복', '이미 초대된 이메일입니다.');
-    
+
     const updatedMembers = [...getWorkspaceEmails(workspace), email];
     const updatedWorkspace = normalizeWorkspaceData({ ...workspace, members: updatedMembers });
     await saveToFirebase('workspaces', workspace.id, updatedWorkspace);
-    
+
     setInviteWs(updatedWorkspace);
     setInviteEmail('');
     showAlert('초대 완료', `${email} 사용자를 성공적으로 초대했습니다.`);
@@ -1046,7 +1055,7 @@ export default function App() {
     if (!workspace) return;
     const targetEmail = normalizeEmail(emailToRemove);
     if (targetEmail === normalizeEmail(workspace.ownerEmail)) return showAlert('불가', '소유자는 워크스페이스에서 제외할 수 없습니다.');
-    
+
     const updatedMembers = getWorkspaceEmails(workspace).filter(email => email !== targetEmail);
     const updatedWorkspace = normalizeWorkspaceData({ ...workspace, members: updatedMembers });
     await saveToFirebase('workspaces', workspace.id, updatedWorkspace);
@@ -1063,16 +1072,16 @@ export default function App() {
     else setProjectFormData({ id: '', name: '', color: 'indigo' });
     setIsProjectModalOpen(true);
   };
-  
+
   const handleProjectSubmit = async (e) => {
-    e.preventDefault(); 
+    e.preventDefault();
     if (!projectFormData.name.trim()) return;
     const projId = projectFormData.id || `proj_${Date.now()}`;
     const pData = { ...projectFormData, id: projId, workspaceId: activeWorkspaceId };
     setIsProjectModalOpen(false);
     await saveToFirebase('projects', projId, pData);
   };
-  
+
   const deleteProject = (projectId) => {
     if (tasks.some(t => t.projectId === projectId)) return showAlert('삭제 불가', '이 폴더에 속한 업무가 존재합니다.');
     showConfirm('프로젝트 삭제', '이 프로젝트 폴더를 삭제하시겠습니까?', async () => {
@@ -1092,17 +1101,17 @@ export default function App() {
       setTaskFormData({ ...validTask, subtasks: validTask.subtasks || [] });
     } else {
       setEditingTask(null);
-      setTaskFormData({ 
-        title: '', 
-        projectId: selectedProjectFilter !== 'all' ? selectedProjectFilter : '', 
-        assignee: '', 
-        description: '', 
-        status: activeTab || 'todo', 
-        hasIssue: false, 
-        issueNote: '', 
-        subtasks: [], 
-        startDate: '', 
-        targetDate: '' 
+      setTaskFormData({
+        title: '',
+        projectId: selectedProjectFilter !== 'all' ? selectedProjectFilter : '',
+        assignee: '',
+        description: '',
+        status: activeTab || 'todo',
+        hasIssue: false,
+        issueNote: '',
+        subtasks: [],
+        startDate: '',
+        targetDate: ''
       });
     }
     setNewSubtaskTitle('');
@@ -1117,7 +1126,7 @@ export default function App() {
     const dateStr = new Date().toISOString().split('T')[0];
     const taskId = editingTask ? editingTask.id : Date.now().toString();
     const taskData = { ...taskFormData, title: taskFormData.title.trim(), id: taskId, updatedAt: dateStr, workspaceId: activeWorkspaceId };
-    
+
     setIsTaskModalOpen(false);
     await saveToFirebase('tasks', taskId, taskData);
     setCurrentMenu('tasks');
@@ -1135,7 +1144,7 @@ export default function App() {
 
   const handleTaskStatusChange = async (taskId, newStatus) => {
     const task = allTasks.find(t => t.id === taskId);
-    if(task) {
+    if (task) {
       const updatedTask = { ...task, status: newStatus, updatedAt: new Date().toISOString().split('T')[0] };
       await saveToFirebase('tasks', taskId, updatedTask);
     }
@@ -1240,11 +1249,11 @@ export default function App() {
 
   // --- 필터링, 정렬 및 리마인더 ---
   const filteredTasks = useMemo(() => {
-    let result = tasks.filter(t => 
-      (t.title || '').toLowerCase().includes(searchQuery.toLowerCase()) || 
+    let result = tasks.filter(t =>
+      (t.title || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
       (t.assignee || '').toLowerCase().includes(searchQuery.toLowerCase())
     );
-    
+
     if (selectedProjectFilter !== 'all') {
       result = result.filter(t => t.projectId === selectedProjectFilter);
     }
@@ -1259,12 +1268,21 @@ export default function App() {
       }
       if (taskSortOption === 'targetDate') return (a.targetDate || '9999-12-31').localeCompare(b.targetDate || '9999-12-31');
       if (taskSortOption === 'startDate') return (a.startDate || '9999-12-31').localeCompare(b.startDate || '9999-12-31');
-      return 0; 
+      return 0;
     });
     return result;
   }, [tasks, searchQuery, taskSortOption, selectedProjectFilter]);
 
   const filteredMembers = useMemo(() => members.filter(m => (m.name || '').toLowerCase().includes(memberSearchQuery.toLowerCase()) || (m.rank || '').includes(memberSearchQuery) || (m.role || '').toLowerCase().includes(memberSearchQuery.toLowerCase())), [members, memberSearchQuery]);
+  const membersByDepartment = useMemo(() => {
+    const departmentOrder = [...departments, { id: '__none__', name: '소속없음' }];
+    return departmentOrder
+      .map(dept => ({
+        dept,
+        members: filteredMembers.filter(member => (member.departmentId || '__none__') === dept.id)
+      }))
+      .filter(group => group.members.length > 0);
+  }, [departments, filteredMembers]);
   const urgentTasks = useMemo(() => tasks.filter(t => {
     const dDay = calculateDDay(t.targetDate, t.status);
     return dDay && dDay.isUrgent;
@@ -1280,7 +1298,7 @@ export default function App() {
     const month = currentMonth.getMonth();
     const firstDay = new Date(year, month, 1).getDay();
     const daysInMonth = new Date(year, month + 1, 0).getDate();
-    
+
     const daysArray = Array(firstDay).fill(null);
     for (let i = 1; i <= daysInMonth; i++) {
       const d = String(i).padStart(2, '0');
@@ -1288,8 +1306,8 @@ export default function App() {
       daysArray.push(`${year}-${m}-${d}`);
     }
 
-    const calendarTasks = tasks.filter(t => 
-      t.startDate && t.targetDate && 
+    const calendarTasks = tasks.filter(t =>
+      t.startDate && t.targetDate &&
       (calendarFilterAssignee === 'all' || t.assignee === calendarFilterAssignee) &&
       (calendarFilterProject === 'all' || t.projectId === calendarFilterProject)
     );
@@ -1300,7 +1318,7 @@ export default function App() {
     });
 
     const taskSlots = {};
-    const occupiedSlots = []; 
+    const occupiedSlots = [];
     sortedTasks.forEach(task => {
       let assignedSlot = -1;
       for (let i = 0; i < occupiedSlots.length; i++) {
@@ -1327,7 +1345,7 @@ export default function App() {
 
             const activeTasks = sortedTasks.filter(t => dateStr >= t.startDate && dateStr <= t.targetDate);
             const maxSlotInDay = activeTasks.length > 0 ? Math.max(...activeTasks.map(t => taskSlots[t.id])) : -1;
-            
+
             const daySlots = [];
             for (let i = 0; i <= maxSlotInDay; i++) {
               daySlots.push(activeTasks.find(t => taskSlots[t.id] === i) || null);
@@ -1343,19 +1361,19 @@ export default function App() {
                 <div className="p-1.5 pb-0">
                   <div className={`text-xs font-bold w-6 h-6 flex items-center justify-center rounded-full ${isToday ? 'bg-indigo-600 text-white' : isWeekend ? 'text-slate-400' : 'text-slate-700'}`}>{dayNum}</div>
                 </div>
-                
+
                 <div className="flex-1 flex flex-col gap-1 mt-1 pb-2">
                   {daySlots.map((t, index) => {
                     if (!t) return <div key={`empty-slot-${index}`} className="h-5"></div>;
 
                     const isStart = t.startDate === dateStr;
                     const isEnd = t.targetDate === dateStr;
-                    
+
                     let barClass = '';
-                    if (isStart && isEnd) barClass = 'mx-1.5 rounded-md'; 
-                    else if (isStart) barClass = 'ml-1.5 -mr-[1px] rounded-l-md relative z-10'; 
-                    else if (isEnd) barClass = 'mr-1.5 -ml-[1px] rounded-r-md relative z-10'; 
-                    else barClass = '-mx-[1px] rounded-none relative z-10'; 
+                    if (isStart && isEnd) barClass = 'mx-1.5 rounded-md';
+                    else if (isStart) barClass = 'ml-1.5 -mr-[1px] rounded-l-md relative z-10';
+                    else if (isEnd) barClass = 'mr-1.5 -ml-[1px] rounded-r-md relative z-10';
+                    else barClass = '-mx-[1px] rounded-none relative z-10';
 
                     const assigneeColor = getAssigneeColor(t.assignee).bar;
                     const showTitle = isStart || dayOfWeek === 0 || dayNum === 1;
@@ -1384,35 +1402,36 @@ export default function App() {
         {children.map(dept => {
           const deptMembers = members.filter(m => m.departmentId === dept.id);
           return (
-          <div key={dept.id} className="relative">
-            <div className="bg-white border border-slate-200 p-3.5 rounded-xl shadow-sm hover:border-indigo-300 hover:shadow-md transition-all group">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className={`p-2 rounded-lg ${level === 0 ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-500'}`}><Network className="w-4 h-4" /></div>
-                  <div>
-                    <span className="font-bold text-slate-800">{dept.name}</span>
-                    <span className="ml-3 text-xs font-semibold text-slate-400">소속 팀원: {deptMembers.length}명</span>
+            <div key={dept.id} className="relative">
+              <div className="bg-white border border-slate-200 p-3.5 rounded-xl shadow-sm hover:border-indigo-300 hover:shadow-md transition-all group">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className={`p-2 rounded-lg ${level === 0 ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-500'}`}><Network className="w-4 h-4" /></div>
+                    <div>
+                      <span className="font-bold text-slate-800">{dept.name}</span>
+                      <span className="ml-3 text-xs font-semibold text-slate-400">소속 팀원: {deptMembers.length}명</span>
+                    </div>
+                  </div>
+                  <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button onClick={() => handleOpenOrgModal(dept.id)} className="text-xs bg-indigo-50 text-indigo-600 font-bold hover:bg-indigo-100 px-3 py-1.5 rounded-lg flex items-center gap-1"><Plus className="w-3.5 h-3.5" /> 하위 부서 추가</button>
+                    <button onClick={() => deleteDepartment(dept.id)} className="text-xs bg-red-50 text-red-500 font-bold hover:bg-red-100 px-2 py-1.5 rounded-lg"><Trash2 className="w-3.5 h-3.5" /></button>
                   </div>
                 </div>
-                <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button onClick={() => handleOpenOrgModal(dept.id)} className="text-xs bg-indigo-50 text-indigo-600 font-bold hover:bg-indigo-100 px-3 py-1.5 rounded-lg flex items-center gap-1"><Plus className="w-3.5 h-3.5" /> 하위 부서 추가</button>
-                  <button onClick={() => deleteDepartment(dept.id)} className="text-xs bg-red-50 text-red-500 font-bold hover:bg-red-100 px-2 py-1.5 rounded-lg"><Trash2 className="w-3.5 h-3.5"/></button>
-                </div>
+                {deptMembers.length > 0 && (
+                  <div className="mt-3 pt-3 border-t border-slate-50 pl-11 flex flex-wrap gap-2">
+                    {deptMembers.map(m => (
+                      <div key={m.id} className="inline-flex items-center gap-1.5 bg-slate-50 hover:bg-slate-100 text-slate-600 text-xs px-2.5 py-1.5 rounded-lg border border-slate-100 transition-colors cursor-default" title={`${m.role}`}>
+                        <div className="w-4 h-4 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center font-bold" style={{ fontSize: '9px' }}>{(m.name || '유').substring(0, 1)}</div>
+                        <span className="font-bold">{m.name}</span><span className="text-slate-400">{m.rank}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-              {deptMembers.length > 0 && (
-                <div className="mt-3 pt-3 border-t border-slate-50 pl-11 flex flex-wrap gap-2">
-                  {deptMembers.map(m => (
-                    <div key={m.id} className="inline-flex items-center gap-1.5 bg-slate-50 hover:bg-slate-100 text-slate-600 text-xs px-2.5 py-1.5 rounded-lg border border-slate-100 transition-colors cursor-default" title={`${m.role}`}>
-                      <div className="w-4 h-4 bg-indigo-100 text-indigo-600 rounded-full flex items-center justify-center font-bold" style={{fontSize: '9px'}}>{(m.name||'유').substring(0, 1)}</div>
-                      <span className="font-bold">{m.name}</span><span className="text-slate-400">{m.rank}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
+              {renderOrganizationTree(dept.id, level + 1)}
             </div>
-            {renderOrganizationTree(dept.id, level + 1)}
-          </div>
-        )})}
+          )
+        })}
       </div>
     );
   };
@@ -1427,7 +1446,7 @@ export default function App() {
     const pColor = PROJECT_COLORS[project?.color] || PROJECT_COLORS['slate'];
 
     return (
-      <div 
+      <div
         key={task.id} draggable onDragStart={(e) => handleCardDragStart(e, task.id)} onDragEnd={handleCardDragEnd}
         className={`group relative bg-white border border-slate-200 p-4 rounded-xl shadow-sm hover:shadow-md transition-all flex flex-col h-full cursor-grab active:cursor-grabbing ${isDragging ? 'opacity-40 scale-95 ring-2 ring-indigo-500' : ''}`}
       >
@@ -1462,18 +1481,18 @@ export default function App() {
             {task.hasIssue && <span className="bg-red-50 text-red-600 text-[10px] px-1.5 py-0.5 rounded font-bold animate-pulse flex items-center"><MessageSquareWarning className="w-2.5 h-2.5 mr-0.5" /> 이슈</span>}
           </div>
         </div>
-        
+
         <h3 className="font-bold text-slate-800 mb-2 line-clamp-2">{task.title}</h3>
-        
+
         <div className="flex justify-between items-center mb-3">
           <span className="inline-flex items-center gap-1 text-slate-500 text-[11px] font-medium"><User className="w-3 h-3" /> {task.assignee || '미지정'}</span>
           {(task.startDate || task.targetDate) && (
             <div className="flex items-center gap-1 text-[11px] text-slate-400 font-medium">
-              <Calendar className="w-3 h-3" /><span>{(task.startDate||'').slice(5)} ~ {(task.targetDate||'').slice(5)}</span>
+              <Calendar className="w-3 h-3" /><span>{(task.startDate || '').slice(5)} ~ {(task.targetDate || '').slice(5)}</span>
             </div>
           )}
         </div>
-        
+
         {subtasks.length > 0 && (
           <div className="mt-auto mb-3 bg-slate-50 rounded-lg p-2.5 border border-slate-100">
             <div className="flex justify-between text-[10px] text-slate-500 mb-1.5 font-bold"><span>하위 업무 달성률</span><span>{progress}%</span></div>
@@ -1523,7 +1542,7 @@ export default function App() {
             <h1 className="text-3xl font-black tracking-tight mb-2">TeamSpace</h1>
             <p className="text-indigo-100 text-sm font-medium">업무 관리를 위한 협업 대시보드</p>
           </div>
-          
+
           <div className="p-8">
             <div className="flex gap-4 mb-6 border-b border-slate-100 pb-2">
               <button onClick={() => setAuthMode('login')} className={`flex-1 pb-2 font-bold text-sm transition-colors ${authMode === 'login' ? 'text-indigo-600 border-b-2 border-indigo-600' : 'text-slate-400 hover:text-slate-600'}`}>로그인</button>
@@ -1539,14 +1558,14 @@ export default function App() {
 
               <div>
                 <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">이메일</label>
-                <input type="email" required value={authForm.email} onChange={e => setAuthForm({...authForm, email: e.target.value})} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all" placeholder="name@company.com" autoComplete="off" />
+                <input type="email" required value={authForm.email} onChange={e => setAuthForm({ ...authForm, email: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all" placeholder="name@company.com" autoComplete="off" />
               </div>
               <div>
                 <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">비밀번호</label>
-                <input type="password" required value={authForm.password} onChange={e => setAuthForm({...authForm, password: e.target.value})} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all" placeholder="비밀번호를 입력하세요" autoComplete="new-password"/>
+                <input type="password" required value={authForm.password} onChange={e => setAuthForm({ ...authForm, password: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all" placeholder="비밀번호를 입력하세요" autoComplete="new-password" />
               </div>
               <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3.5 rounded-xl transition-colors shadow-md hover:shadow-lg mt-2 flex items-center justify-center gap-2">
-                {authMode === 'login' ? <><LogIn className="w-5 h-5"/> 로그인</> : <><UserPlus className="w-5 h-5"/> 회원가입</>}
+                {authMode === 'login' ? <><LogIn className="w-5 h-5" /> 로그인</> : <><UserPlus className="w-5 h-5" /> 회원가입</>}
               </button>
             </form>
 
@@ -1557,17 +1576,17 @@ export default function App() {
 
             <div className="space-y-3">
               <button onClick={handleGoogleAuth} className="w-full bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold py-3 rounded-xl transition-colors flex items-center justify-center gap-3 shadow-sm">
-                <svg className="w-5 h-5" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
+                <svg className="w-5 h-5" viewBox="0 0 24 24"><path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" /><path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" /><path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" /><path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" /></svg>
                 Google 계정으로 계속하기
               </button>
-              
+
               <button onClick={() => { localStorage.setItem('guest_mode', 'true'); handleGuestAuth(); }} className="w-full bg-slate-100 hover:bg-slate-200 text-slate-600 font-bold py-3 rounded-xl transition-colors text-sm flex items-center justify-center gap-2">
-                <User className="w-4 h-4"/> 게스트(체험) 모드로 둘러보기
+                <User className="w-4 h-4" /> 게스트(체험) 모드로 둘러보기
               </button>
             </div>
           </div>
         </div>
-        
+
         {customAlert.isOpen && (
           <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4 z-[100]">
             <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm text-center p-6 transform transition-all">
@@ -1585,19 +1604,19 @@ export default function App() {
   if (!activeWorkspaceId) {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col items-center p-6 font-sans">
-        
+
         {/* 상단 프로필 바 */}
         <div className="w-full max-w-5xl flex justify-end mb-10 mt-4">
           <div className="flex items-center gap-4 bg-white px-4 py-2 rounded-full shadow-sm border border-slate-200">
             <div className="flex items-center gap-2">
               <div className="w-7 h-7 bg-indigo-100 text-indigo-700 rounded-full flex items-center justify-center font-bold text-xs">
-                {user.email ? user.email.substring(0,1).toUpperCase() : 'G'}
+                {user.email ? user.email.substring(0, 1).toUpperCase() : 'G'}
               </div>
               <span className="text-sm font-bold text-slate-700">{user.email || '게스트 사용자'}</span>
             </div>
             <div className="w-px h-4 bg-slate-200"></div>
             <button onClick={handleLogout} className="text-sm font-bold text-slate-400 hover:text-red-500 flex items-center gap-1 transition-colors">
-              <LogOut className="w-4 h-4"/> 로그아웃
+              <LogOut className="w-4 h-4" /> 로그아웃
             </button>
           </div>
         </div>
@@ -1616,12 +1635,12 @@ export default function App() {
             const wsTasksCount = stats?.tasks ?? allTasks.filter(t => t.workspaceId === ws.id).length;
             const wsMembersCount = stats?.members ?? allMembers.filter(m => m.workspaceId === ws.id).length;
             const isOwner = ws.ownerId === user.uid;
-            
+
             return (
               <div key={ws.id} onClick={() => setActiveWorkspaceId(ws.id)} className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 hover:border-indigo-500 hover:shadow-lg cursor-pointer transition-all flex flex-col items-center text-center relative group">
                 <div className="absolute top-4 left-4">
-                  {isOwner ? 
-                    <span className="bg-emerald-100 text-emerald-700 text-[10px] font-bold px-2 py-1 rounded">소유자</span> : 
+                  {isOwner ?
+                    <span className="bg-emerald-100 text-emerald-700 text-[10px] font-bold px-2 py-1 rounded">소유자</span> :
                     <span className="bg-slate-100 text-slate-600 text-[10px] font-bold px-2 py-1 rounded">멤버</span>
                   }
                 </div>
@@ -1629,23 +1648,23 @@ export default function App() {
                 <div className="absolute top-3 right-3 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                   {isOwner && (
                     <>
-                      <button onClick={(e) => { e.stopPropagation(); handleOpenWsModal(ws); }} className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg"><Edit2 className="w-4 h-4"/></button>
-                      <button onClick={(e) => { e.stopPropagation(); deleteWorkspace(ws.id); }} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 className="w-4 h-4"/></button>
+                      <button onClick={(e) => { e.stopPropagation(); handleOpenWsModal(ws); }} className="p-1.5 text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 rounded-lg"><Edit2 className="w-4 h-4" /></button>
+                      <button onClick={(e) => { e.stopPropagation(); deleteWorkspace(ws.id); }} className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg"><Trash2 className="w-4 h-4" /></button>
                     </>
                   )}
                 </div>
-                
+
                 <div className="w-14 h-14 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform mt-2">
                   <FolderOpen className="w-7 h-7" />
                 </div>
                 <h3 className="font-bold text-lg text-slate-800 mb-1">{ws.name}</h3>
                 <p className="text-xs text-slate-400 font-medium mb-4">업무 {wsTasksCount}개 · 등록 팀원 {wsMembersCount}명</p>
-                
+
                 {ws.members && ws.members.length > 0 && (
                   <div className="flex -space-x-2 mt-auto">
                     {ws.members.slice(0, 3).map((email, i) => (
                       <div key={i} className="w-6 h-6 rounded-full bg-slate-200 border-2 border-white flex items-center justify-center text-[8px] font-bold text-slate-600" title={email}>
-                        {email.substring(0,1).toUpperCase()}
+                        {email.substring(0, 1).toUpperCase()}
                       </div>
                     ))}
                     {ws.members.length > 3 && <div className="w-6 h-6 rounded-full bg-slate-100 border-2 border-white flex items-center justify-center text-[8px] font-bold text-slate-500">+{ws.members.length - 3}</div>}
@@ -1654,7 +1673,7 @@ export default function App() {
               </div>
             );
           })}
-          
+
           {user.email && (
             <div onClick={() => handleOpenWsModal()} className="bg-slate-50/50 p-6 rounded-2xl border-2 border-dashed border-slate-300 hover:border-indigo-400 hover:bg-indigo-50 cursor-pointer transition-all flex flex-col items-center justify-center text-center text-slate-500 hover:text-indigo-600 min-h-[220px] group">
               <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center mb-3 shadow-sm group-hover:scale-110 transition-transform border border-slate-100">
@@ -1676,18 +1695,18 @@ export default function App() {
           <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
             <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm">
               <div className="p-5 border-b flex justify-between items-center">
-                <h3 className="font-bold text-lg flex items-center gap-2"><LayoutGrid className="w-5 h-5 text-indigo-600"/> {editingWs ? '워크스페이스 수정' : '새 조직 공간 만들기'}</h3>
-                <button onClick={() => setIsWsModalOpen(false)}><X className="w-5 h-5 text-slate-400"/></button>
+                <h3 className="font-bold text-lg flex items-center gap-2"><LayoutGrid className="w-5 h-5 text-indigo-600" /> {editingWs ? '워크스페이스 수정' : '새 조직 공간 만들기'}</h3>
+                <button onClick={() => setIsWsModalOpen(false)}><X className="w-5 h-5 text-slate-400" /></button>
               </div>
               <form onSubmit={handleWsSubmit}>
                 <div className="p-5 space-y-4">
                   <div>
                     <label className="block text-sm font-bold mb-1">조직(워크스페이스) 이름 <span className="text-red-500">*</span></label>
-                    <input type="text" autoFocus required value={wsFormData.name} onChange={e => setWsFormData({...wsFormData, name: e.target.value})} placeholder="예: 알파 디자인팀" className="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
+                    <input type="text" autoFocus required value={wsFormData.name} onChange={e => setWsFormData({ ...wsFormData, name: e.target.value })} placeholder="예: 알파 디자인팀" className="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none" />
                   </div>
                   <div>
                     <label className="block text-sm font-bold mb-1">설명</label>
-                    <textarea value={wsFormData.description} onChange={e => setWsFormData({...wsFormData, description: e.target.value})} placeholder="공간에 대한 설명을 적어주세요." className="w-full px-3 py-2 border rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500" rows="3"/>
+                    <textarea value={wsFormData.description} onChange={e => setWsFormData({ ...wsFormData, description: e.target.value })} placeholder="공간에 대한 설명을 적어주세요." className="w-full px-3 py-2 border rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500" rows="3" />
                   </div>
                 </div>
                 <div className="p-4 border-t bg-slate-50 flex justify-between rounded-b-2xl">
@@ -1701,20 +1720,20 @@ export default function App() {
             </div>
           </div>
         )}
-        
+
         {/* 공통 컴포넌트: 백업/복원 및 알림 모달 */}
         {isDataModalOpen && (
           <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 text-left">
             <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
-              <div className="p-5 border-b flex justify-between items-center"><h3 className="font-bold text-lg flex items-center gap-2"><Database className="w-5 h-5 text-indigo-600"/> 시스템 전체 데이터 백업/복원</h3><button onClick={() => setIsDataModalOpen(false)}><X className="w-5 h-5 text-slate-400"/></button></div>
+              <div className="p-5 border-b flex justify-between items-center"><h3 className="font-bold text-lg flex items-center gap-2"><Database className="w-5 h-5 text-indigo-600" /> 시스템 전체 데이터 백업/복원</h3><button onClick={() => setIsDataModalOpen(false)}><X className="w-5 h-5 text-slate-400" /></button></div>
               <div className="p-6 space-y-6">
                 <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4">
-                  <h4 className="font-bold text-indigo-900 mb-2 flex items-center gap-2"><Save className="w-4 h-4"/> 내 PC로 데이터 내보내기</h4>
+                  <h4 className="font-bold text-indigo-900 mb-2 flex items-center gap-2"><Save className="w-4 h-4" /> 내 PC로 데이터 내보내기</h4>
                   <p className="text-sm text-indigo-700/80 mb-4">생성된 모든 조직 공간(워크스페이스)의 데이터를 JSON으로 다운로드합니다.</p>
                   <button onClick={handleExportData} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-lg text-sm">백업 파일 다운로드</button>
                 </div>
                 <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
-                  <h4 className="font-bold text-slate-800 mb-2 flex items-center gap-2"><Upload className="w-4 h-4"/> 다른 PC에서 데이터 불러오기</h4>
+                  <h4 className="font-bold text-slate-800 mb-2 flex items-center gap-2"><Upload className="w-4 h-4" /> 다른 PC에서 데이터 불러오기</h4>
                   <p className="text-sm text-slate-500 mb-4">다운로드한 JSON 파일을 선택하여 전체 시스템 데이터를 덮어씁니다.</p>
                   <input type="file" accept=".json" ref={fileInputRef} onChange={handleImportData} className="hidden" />
                   <button onClick={() => fileInputRef.current.click()} className="w-full bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-bold py-2.5 rounded-lg text-sm">백업 파일 선택하기</button>
@@ -1762,7 +1781,7 @@ export default function App() {
               <span className="text-sm font-bold bg-indigo-50 text-indigo-700 px-2.5 py-1 rounded-md max-w-[150px] truncate">{currentWorkspaceName}</span>
             </div>
           </div>
-          
+
           <div className="hidden md:flex gap-1 border-l border-slate-200 pl-4">
             <button onClick={() => setCurrentMenu('tasks')} className={`px-3 py-1.5 rounded-lg text-sm font-bold flex items-center gap-2 ${currentMenu === 'tasks' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-100'}`}><LayoutDashboard className="w-4 h-4" /> 업무 보드</button>
             <button onClick={() => setCurrentMenu('projects')} className={`px-3 py-1.5 rounded-lg text-sm font-bold flex items-center gap-2 ${currentMenu === 'projects' ? 'bg-indigo-50 text-indigo-700' : 'text-slate-500 hover:bg-slate-100'}`}><FolderKanban className="w-4 h-4" /> 프로젝트 관리</button>
@@ -1846,12 +1865,12 @@ export default function App() {
                           <Mail className="w-4 h-4" /> 초대하기
                         </button>
                       </div>
-                      {!isOwner && <p className="text-sm text-red-500 mb-4 font-bold flex items-center gap-1"><AlertCircle className="w-4 h-4"/> 소유자만 팀원을 초대할 수 있습니다.</p>}
+                      {!isOwner && <p className="text-sm text-red-500 mb-4 font-bold flex items-center gap-1"><AlertCircle className="w-4 h-4" /> 소유자만 팀원을 초대할 수 있습니다.</p>}
                       <div className="space-y-2">
                         {allowedEmails.map((email, idx) => (
                           <div key={idx} className="flex items-center justify-between p-3 border border-slate-100 rounded-lg hover:bg-slate-50">
                             <div className="flex items-center gap-3">
-                              <div className="w-8 h-8 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center font-bold text-xs uppercase">{email.substring(0,1)}</div>
+                              <div className="w-8 h-8 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center font-bold text-xs uppercase">{email.substring(0, 1)}</div>
                               <div>
                                 <span className="font-bold text-slate-800 block text-sm">{email}</span>
                                 {email === ownerEmail && <span className="text-[10px] bg-emerald-100 text-emerald-700 font-bold px-1.5 py-0.5 rounded">소유자</span>}
@@ -1894,7 +1913,7 @@ export default function App() {
                       <div className="flex justify-between items-start mb-6"><h3 className="font-bold text-lg text-slate-800 line-clamp-1">{p.name}</h3></div>
                       <div className="space-y-3 mt-auto">
                         <div className="flex justify-between items-center text-sm">
-                          <span className="text-slate-500 flex items-center gap-1.5"><ListTodo className="w-4 h-4"/> 등록 업무</span>
+                          <span className="text-slate-500 flex items-center gap-1.5"><ListTodo className="w-4 h-4" /> 등록 업무</span>
                           <span className="font-black text-lg text-slate-700">{pTasks.length}건</span>
                         </div>
                       </div>
@@ -1916,7 +1935,7 @@ export default function App() {
           <div className="flex flex-col lg:flex-row gap-6 items-start">
             <aside className="w-64 shrink-0 bg-white rounded-2xl border border-slate-200 p-4 shadow-sm sticky top-24 hidden lg:block">
               <div className="flex justify-between items-center mb-4">
-                <h3 className="font-bold text-slate-800 flex items-center gap-2"><FolderOpen className="w-4 h-4 text-indigo-600"/> 내 프로젝트</h3>
+                <h3 className="font-bold text-slate-800 flex items-center gap-2"><FolderOpen className="w-4 h-4 text-indigo-600" /> 내 프로젝트</h3>
               </div>
               <ul className="space-y-1">
                 <li>
@@ -1930,7 +1949,7 @@ export default function App() {
                     <li key={p.id}>
                       <button onClick={() => setSelectedProjectFilter(p.id)} className={`w-full text-left px-3 py-2.5 rounded-xl text-sm font-bold flex justify-between items-center transition-colors ${selectedProjectFilter === p.id ? 'bg-indigo-50 text-indigo-700' : 'text-slate-600 hover:bg-slate-50'}`}>
                         <div className="flex items-center gap-2 truncate">
-                          <div className={`w-2.5 h-2.5 rounded-full ${safeColor.bg.replace('100','400')}`}></div>
+                          <div className={`w-2.5 h-2.5 rounded-full ${safeColor.bg.replace('100', '400')}`}></div>
                           <span className="truncate">{p.name}</span>
                         </div>
                         <span className={`text-[10px] px-2 py-0.5 rounded-full shrink-0 ${selectedProjectFilter === p.id ? 'bg-indigo-200 text-indigo-800' : 'bg-slate-100 text-slate-500'}`}>{tasks.filter(t => t.projectId === p.id).length}</span>
@@ -1943,18 +1962,18 @@ export default function App() {
 
             <div className="flex-1 min-w-0">
               <header className="mb-4 flex flex-col sm:flex-row sm:justify-between sm:items-end gap-4">
-                <div><h1 className="text-2xl font-bold flex items-center gap-2">{selectedProjectFilter === 'all' ? '모든 프로젝트 업무' : (projects.find(p=>p.id === selectedProjectFilter)?.name || '프로젝트')}</h1></div>
+                <div><h1 className="text-2xl font-bold flex items-center gap-2">{selectedProjectFilter === 'all' ? '모든 프로젝트 업무' : (projects.find(p => p.id === selectedProjectFilter)?.name || '프로젝트')}</h1></div>
                 <div className="flex flex-wrap gap-2 w-full sm:w-auto">
                   <div className="relative flex-1 sm:w-64"><Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" /><input type="text" placeholder="업무명 또는 담당자..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="w-full pl-9 pr-4 py-2 rounded-lg border border-slate-200 text-sm focus:ring-2 focus:ring-indigo-500 outline-none" /></div>
                   <button onClick={() => handleOpenTaskModal()} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2"><Plus className="w-4 h-4" /> 새 업무</button>
                 </div>
               </header>
-              
+
               <div className="lg:hidden mb-4 bg-white p-2.5 rounded-xl border border-slate-200 shadow-sm flex items-center gap-2">
                 <Folder className="w-5 h-5 text-indigo-500 shrink-0 ml-1" />
                 <select value={selectedProjectFilter} onChange={(e) => setSelectedProjectFilter(e.target.value)} className="w-full bg-transparent border-none text-sm font-bold text-slate-700 outline-none focus:ring-0 cursor-pointer">
                   <option value="all">모든 프로젝트 폴더 보기 ({tasks.length}건)</option>
-                  {projects.map(p => <option key={p.id} value={p.id}>{p.name} ({tasks.filter(t=>t.projectId === p.id).length}건)</option>)}
+                  {projects.map(p => <option key={p.id} value={p.id}>{p.name} ({tasks.filter(t => t.projectId === p.id).length}건)</option>)}
                 </select>
               </div>
 
@@ -1970,7 +1989,7 @@ export default function App() {
                   </select>
                 </div>
               </div>
-            
+
               {viewMode === 'board' ? (
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                   {Object.entries(STATUSES).map(([key, info]) => {
@@ -1979,7 +1998,7 @@ export default function App() {
                     return (
                       <div key={key} onDragOver={(e) => handleColumnDragOver(e, key)} onDragLeave={handleColumnDragLeave} onDrop={(e) => handleColumnDrop(e, key)}
                         className={`rounded-2xl border p-4 min-h-[60vh] transition-colors duration-200 ${info.borderColor} ${info.color} ${dragOverColumn === key ? 'ring-2 ring-indigo-400 bg-indigo-50/50' : ''}`}>
-                        <h2 className="font-bold mb-4 flex items-center gap-2"><StatusIcon className="w-4 h-4"/>{info.label}<span className="bg-white text-slate-600 text-xs py-0.5 px-2 rounded-full font-bold border border-slate-200 ml-auto">{columnTasks.length}</span></h2>
+                        <h2 className="font-bold mb-4 flex items-center gap-2"><StatusIcon className="w-4 h-4" />{info.label}<span className="bg-white text-slate-600 text-xs py-0.5 px-2 rounded-full font-bold border border-slate-200 ml-auto">{columnTasks.length}</span></h2>
                         <div className="space-y-4">
                           {columnTasks.map(renderTaskCard)}
                           {columnTasks.length === 0 && (
@@ -2017,40 +2036,40 @@ export default function App() {
               <div><h1 className="text-2xl font-bold flex items-center gap-2"><CalendarDays className="text-indigo-600 w-7 h-7" /> 일정 캘린더</h1></div>
               <div className="flex flex-wrap items-center gap-3">
                 <div className="flex items-center gap-2 bg-white px-2 py-1.5 rounded-lg border border-slate-200 shadow-sm">
-                  <span className="text-[11px] font-bold text-slate-500 pl-2"><Folder className="w-3.5 h-3.5 inline mr-1"/>프로젝트:</span>
+                  <span className="text-[11px] font-bold text-slate-500 pl-2"><Folder className="w-3.5 h-3.5 inline mr-1" />프로젝트:</span>
                   <select value={calendarFilterProject} onChange={e => setCalendarFilterProject(e.target.value)} className="border-none bg-transparent text-sm font-bold text-slate-700 outline-none cursor-pointer w-32">
                     <option value="all">전체 (All)</option>
                     {projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                   </select>
                 </div>
                 <div className="flex items-center gap-2 bg-white px-2 py-1.5 rounded-lg border border-slate-200 shadow-sm">
-                  <span className="text-[11px] font-bold text-slate-500 pl-2"><User className="w-3.5 h-3.5 inline mr-1"/>담당자:</span>
+                  <span className="text-[11px] font-bold text-slate-500 pl-2"><User className="w-3.5 h-3.5 inline mr-1" />담당자:</span>
                   <select value={calendarFilterAssignee} onChange={e => setCalendarFilterAssignee(e.target.value)} className="border-none bg-transparent text-sm font-bold text-slate-700 outline-none cursor-pointer w-24">
                     <option value="all">전체 (All)</option>
                     {members.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}
                   </select>
                 </div>
                 <div className="flex items-center gap-1 bg-white px-2 py-1 rounded-lg border border-slate-200 shadow-sm ml-auto lg:ml-0">
-                  <button onClick={() => changeMonth(-1)} className="p-1.5 hover:bg-slate-100 rounded text-slate-600"><ChevronLeft className="w-4 h-4"/></button>
+                  <button onClick={() => changeMonth(-1)} className="p-1.5 hover:bg-slate-100 rounded text-slate-600"><ChevronLeft className="w-4 h-4" /></button>
                   <span className="font-bold text-slate-800 min-w-[90px] text-center text-sm">{currentMonth.getFullYear()}년 {currentMonth.getMonth() + 1}월</span>
-                  <button onClick={() => changeMonth(1)} className="p-1.5 hover:bg-slate-100 rounded text-slate-600"><ChevronRight className="w-4 h-4"/></button>
+                  <button onClick={() => changeMonth(1)} className="p-1.5 hover:bg-slate-100 rounded text-slate-600"><ChevronRight className="w-4 h-4" /></button>
                 </div>
-	              </div>
-	            </header>
-	            <div className="flex flex-wrap gap-2 mb-4">
-	              {[...new Set(tasks.map(t => t.assignee || '미지정'))].map(name => {
-	                const color = getAssigneeColor(name).chip;
-	                return (
-	                  <span key={name} className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-bold ${color}`}>
-	                    <span className={`w-2 h-2 rounded-full ${getAssigneeColor(name).bar}`}></span>
-	                    {name}
-	                  </span>
-	                );
-	              })}
-	            </div>
-	            {renderCalendar()}
-	          </div>
-	        )}
+              </div>
+            </header>
+            <div className="flex flex-wrap gap-2 mb-4">
+              {[...new Set(tasks.map(t => t.assignee || '미지정'))].map(name => {
+                const color = getAssigneeColor(name).chip;
+                return (
+                  <span key={name} className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-xs font-bold ${color}`}>
+                    <span className={`w-2 h-2 rounded-full ${getAssigneeColor(name).bar}`}></span>
+                    {name}
+                  </span>
+                );
+              })}
+            </div>
+            {renderCalendar()}
+          </div>
+        )}
 
         {/* 팀원 관리 탭 */}
         {currentMenu === 'members' && isCurrentWorkspaceOwner && (
@@ -2065,65 +2084,86 @@ export default function App() {
                 <button onClick={() => handleOpenMemberModal()} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2"><Plus className="w-4 h-4" /> 팀원 등록</button>
               </div>
             </header>
-
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-4 mb-6">
-              <input type="file" accept=".json,application/json" ref={googleCalendarKeyInputRef} onChange={handleGoogleCalendarKeyUpload} className="hidden" />
-              <div className="grid grid-cols-1 lg:grid-cols-[auto_1fr_120px_auto] gap-3 items-end">
-                <button onClick={() => googleCalendarKeyInputRef.current?.click()} className="bg-white border border-slate-200 text-slate-700 px-4 py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-2 hover:bg-slate-50">
-                  <Upload className="w-4 h-4" /> API Key JSON
-                </button>
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 mb-1">Google Calendar ID</label>
-                  <input type="text" value={googleCalendarConfig.calendarId || ''} onChange={e => persistGoogleCalendarConfig({ ...googleCalendarConfig, calendarId: e.target.value })} placeholder="예: company.com_xxxxx@group.calendar.google.com" className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500" />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold text-slate-500 mb-1">조회 연도</label>
-                  <input type="number" value={googleCalendarConfig.year || ''} onChange={e => persistGoogleCalendarConfig({ ...googleCalendarConfig, year: e.target.value })} className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-indigo-500" />
-                </div>
-                <button onClick={syncGoogleCalendarAnnualLeave} disabled={isCalendarSyncing} className="bg-emerald-600 disabled:bg-slate-300 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-2">
-                  <CalendarDays className="w-4 h-4" /> {isCalendarSyncing ? '동기화 중' : '연차 동기화'}
-                </button>
-              </div>
-              <div className="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
-                <span className="font-bold text-slate-700">불러온 일정 {annualLeaveEvents.length}건</span>
-                <span>API Key는 브라우저에서 사용되므로 HTTP referrer와 Calendar API 제한을 설정하세요.</span>
-                <span>일정 제목/설명에 팀원 이름과 연차, 휴가, 반차 키워드가 함께 있어야 사용 연차로 계산됩니다.</span>
-              </div>
-            </div>
-	            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-	              {filteredMembers.map(m => {
-	                const age = calculateAge(m.birthday);
-	                const dept = departments.find(d => d.id === m.departmentId);
-	                const nextPromotionDate = calculateNextPromotionDate(m.rank, m.joinDate, m.promotionDate);
-                  const annualLeaveBase = getAnnualLeaveBase(m);
-                  const usedAnnualLeave = getUsedAnnualLeaveDays(m, annualLeaveEvents);
-                  const remainingAnnualLeave = annualLeaveBase - usedAnnualLeave;
-	                return (
-	                  <div key={m.id} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm relative group">
-	                    <button onClick={() => handleOpenMemberModal(m)} className="absolute top-4 right-4 text-slate-300 hover:text-indigo-600 opacity-0 group-hover:opacity-100"><Edit2 className="w-4 h-4" /></button>
-	                    <div className="text-center mb-5 mt-2"><div className="w-16 h-16 bg-gradient-to-tr from-indigo-100 to-blue-50 text-indigo-600 rounded-full flex items-center justify-center text-xl font-black mx-auto mb-3">{(m.name||'유').substring(0, 1)}</div><h3 className="font-bold text-lg text-slate-800">{m.name}</h3><p className="text-sm text-slate-500 font-medium mt-1.5">{m.rank} | {m.role} <br/>({dept?.name || '소속없음'})</p></div>
-	                    <div className="grid grid-cols-2 gap-2 text-xs mb-4">
-	                      <div className="bg-slate-50 border border-slate-100 rounded-lg px-3 py-2">
-	                        <span className="block text-slate-400 font-bold mb-0.5">나이</span>
-	                        <span className="font-bold text-slate-700">{age ? `${age}세` : '-'}</span>
-	                      </div>
-	                      <div className="bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2">
-	                        <span className="block text-indigo-400 font-bold mb-0.5">다음 진급일</span>
-	                        <span className="font-bold text-indigo-700">{formatDateLabel(nextPromotionDate)}</span>
-	                      </div>
-                        <div className="bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2">
-                          <span className="block text-emerald-500 font-bold mb-0.5">잔여 연차</span>
-                          <span className={`font-bold ${remainingAnnualLeave < 0 ? 'text-red-600' : 'text-emerald-700'}`}>{formatLeaveDays(remainingAnnualLeave)}</span>
+            <div className="space-y-6">
+              {membersByDepartment.map(({ dept, members: deptMembers }) => {
+                const isExpanded = !!expandedDepartments[dept.id];
+                return (
+                  <section key={dept.id} className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden">
+                    <div 
+                      onClick={() => toggleDepartment(dept.id)}
+                      className="px-5 py-4 bg-slate-50 border-b border-slate-100 flex items-center justify-between cursor-pointer select-none hover:bg-slate-100/80 transition-colors"
+                    >
+                      <div className="flex items-center gap-3">
+                        {isExpanded ? (
+                          <ChevronDown className="w-4 h-4 text-indigo-600 transition-transform" />
+                        ) : (
+                          <ChevronRight className="w-4 h-4 text-slate-400 transition-transform" />
+                        )}
+                        <h2 className="font-black text-slate-800 flex items-center gap-2">
+                          <Building className="w-4 h-4 text-indigo-600" />
+                          {dept.name}
+                        </h2>
+                      </div>
+                      <span className="text-xs font-bold text-slate-500 bg-white border border-slate-200 rounded-full px-2.5 py-1">{deptMembers.length}명</span>
+                    </div>
+                    {isExpanded && (
+                      <div className="p-5 bg-slate-50/30">
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                          {deptMembers.map(m => {
+                            const age = calculateAge(m.birthday);
+                            const nextPromotionDate = calculateNextPromotionDate(m.rank, m.joinDate, m.promotionDate);
+                            const annualLeaveBase = getAnnualLeaveBase(m);
+                            const usedAnnualLeave = getUsedAnnualLeaveDays(m, annualLeaveEvents);
+                            const remainingAnnualLeave = annualLeaveBase - usedAnnualLeave;
+                            return (
+                              <div key={m.id} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm relative group">
+                                <button onClick={() => handleOpenMemberModal(m)} className="absolute top-4 right-4 text-slate-300 hover:text-indigo-600 opacity-0 group-hover:opacity-100"><Edit2 className="w-4 h-4" /></button>
+                                <div className="text-center mb-5 mt-2">
+                                  <div className="w-16 h-16 bg-gradient-to-tr from-indigo-100 to-blue-50 text-indigo-600 rounded-full flex items-center justify-center text-xl font-black mx-auto mb-3">
+                                    {(m.name || '유').substring(0, 1)}
+                                  </div>
+                                  <h3 className="font-bold text-lg text-slate-800">{m.name}</h3>
+                                  <p className="text-sm text-slate-500 font-medium mt-1.5">
+                                    {m.rank} | {m.role}
+                                  </p>
+                                </div>
+                                <div className="grid grid-cols-2 gap-2 text-xs mb-4">
+                                  <div className="bg-slate-50 border border-slate-100 rounded-lg px-3 py-2">
+                                    <span className="block text-slate-400 font-bold mb-0.5">나이</span>
+                                    <span className="font-bold text-slate-700">{age ? `${age}세` : '-'}</span>
+                                  </div>
+                                  <div className="bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2">
+                                    <span className="block text-indigo-400 font-bold mb-0.5">다음 진급일</span>
+                                    <span className="font-bold text-indigo-700">{formatDateLabel(nextPromotionDate)}</span>
+                                  </div>
+                                  <div className="bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2">
+                                    <span className="block text-emerald-500 font-bold mb-0.5">잔여 연차</span>
+                                    <span className={`font-bold ${remainingAnnualLeave < 0 ? 'text-red-600' : 'text-emerald-700'}`}>{formatLeaveDays(remainingAnnualLeave)}</span>
+                                  </div>
+                                  <div className="bg-slate-50 border border-slate-100 rounded-lg px-3 py-2">
+                                    <span className="block text-slate-400 font-bold mb-0.5">부여/사용</span>
+                                    <span className="font-bold text-slate-700">{formatLeaveDays(annualLeaveBase)} / {formatLeaveDays(usedAnnualLeave)}</span>
+                                  </div>
+                                </div>
+                                <div className="mt-4 pt-4 border-t border-slate-100 flex gap-2">
+                                  <button onClick={() => generateGreetingAI(m, 'birthday')} className="flex-1 bg-slate-50 hover:bg-slate-100 py-2 rounded-lg text-xs font-bold flex justify-center text-slate-600">
+                                    <Cake className="w-3.5 h-3.5 mr-1" /> 생일 축하
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
-                        <div className="bg-slate-50 border border-slate-100 rounded-lg px-3 py-2">
-                          <span className="block text-slate-400 font-bold mb-0.5">부여/사용</span>
-                          <span className="font-bold text-slate-700">{formatLeaveDays(annualLeaveBase)} / {formatLeaveDays(usedAnnualLeave)}</span>
-                        </div>
-	                    </div>
-	                    <div className="mt-4 pt-4 border-t border-slate-100 flex gap-2"><button onClick={() => generateGreetingAI(m, 'birthday')} className="flex-1 bg-slate-50 hover:bg-slate-100 py-2 rounded-lg text-xs font-bold flex justify-center text-slate-600"><Cake className="w-3.5 h-3.5 mr-1"/> 생일 축하</button></div>
-	                  </div>
-	                );
-	              })}
+                      </div>
+                    )}
+                  </section>
+                );
+              })}
+              {membersByDepartment.length === 0 && (
+                <div className="bg-white border border-dashed border-slate-200 rounded-2xl py-16 text-center text-sm font-bold text-slate-400">
+                  표시할 팀원이 없습니다.
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -2146,13 +2186,13 @@ export default function App() {
       {isProjectModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm">
-            <div className="p-5 border-b flex justify-between items-center"><h3 className="font-bold text-lg">{projectFormData.id ? '프로젝트 수정' : '새 프로젝트 생성'}</h3><button onClick={() => setIsProjectModalOpen(false)}><X className="w-5 h-5 text-slate-400"/></button></div>
+            <div className="p-5 border-b flex justify-between items-center"><h3 className="font-bold text-lg">{projectFormData.id ? '프로젝트 수정' : '새 프로젝트 생성'}</h3><button onClick={() => setIsProjectModalOpen(false)}><X className="w-5 h-5 text-slate-400" /></button></div>
             <form onSubmit={handleProjectSubmit}>
               <div className="p-5 space-y-4">
-                <div><label className="block text-sm font-bold mb-1">프로젝트 이름 *</label><input type="text" autoFocus required value={projectFormData.name} onChange={e => setProjectFormData({...projectFormData, name: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none" /></div>
+                <div><label className="block text-sm font-bold mb-1">프로젝트 이름 *</label><input type="text" autoFocus required value={projectFormData.name} onChange={e => setProjectFormData({ ...projectFormData, name: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none" /></div>
                 <div>
                   <label className="block text-sm font-bold mb-2">테마 색상</label>
-                  <div className="flex gap-3">{Object.keys(PROJECT_COLORS).map(k => <button key={k} type="button" onClick={() => setProjectFormData({...projectFormData, color: k})} className={`w-8 h-8 rounded-full ${PROJECT_COLORS[k].bg.replace('100', '400')} ${projectFormData.color === k ? 'ring-2 ring-slate-400 scale-110' : 'opacity-60'}`} />)}</div>
+                  <div className="flex gap-3">{Object.keys(PROJECT_COLORS).map(k => <button key={k} type="button" onClick={() => setProjectFormData({ ...projectFormData, color: k })} className={`w-8 h-8 rounded-full ${PROJECT_COLORS[k].bg.replace('100', '400')} ${projectFormData.color === k ? 'ring-2 ring-slate-400 scale-110' : 'opacity-60'}`} />)}</div>
                 </div>
               </div>
               <div className="p-4 border-t bg-slate-50 flex justify-end gap-2 rounded-b-2xl"><button type="button" onClick={() => setIsProjectModalOpen(false)} className="px-4 py-2 bg-white border rounded-lg font-bold text-sm">취소</button><button type="submit" className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold text-sm">저장</button></div>
@@ -2164,35 +2204,35 @@ export default function App() {
       {isTaskModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-2xl max-h-[90vh] flex flex-col">
-            <div className="p-5 border-b flex justify-between items-center"><h3 className="font-bold text-lg">{editingTask ? '업무 수정' : '새 업무 등록'}</h3><button onClick={() => setIsTaskModalOpen(false)}><X className="w-5 h-5 text-slate-400"/></button></div>
+            <div className="p-5 border-b flex justify-between items-center"><h3 className="font-bold text-lg">{editingTask ? '업무 수정' : '새 업무 등록'}</h3><button onClick={() => setIsTaskModalOpen(false)}><X className="w-5 h-5 text-slate-400" /></button></div>
             <div className="p-5 overflow-y-auto space-y-5">
-              <div><label className="block text-sm font-bold mb-1">업무명 *</label><input type="text" value={taskFormData.title || ''} onChange={e => setTaskFormData({...taskFormData, title: e.target.value})} className="w-full px-3 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-indigo-500" /></div>
+              <div><label className="block text-sm font-bold mb-1">업무명 *</label><input type="text" value={taskFormData.title || ''} onChange={e => setTaskFormData({ ...taskFormData, title: e.target.value })} className="w-full px-3 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-indigo-500" /></div>
               <div className="grid grid-cols-2 gap-4">
-                <div className="col-span-2"><label className="block text-sm font-bold mb-1">소속 프로젝트</label><select value={taskFormData.projectId || ''} onChange={e => setTaskFormData({...taskFormData, projectId: e.target.value})} className="w-full px-3 py-2 border rounded-lg bg-white outline-none"><option value="">선택 안 함</option>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
-                <div><label className="block text-sm font-bold mb-1">담당자</label><select value={taskFormData.assignee || ''} onChange={e => setTaskFormData({...taskFormData, assignee: e.target.value})} className="w-full px-3 py-2 border rounded-lg bg-white"><option value="">선택 안 함</option>{members.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}</select></div>
-                <div><label className="block text-sm font-bold mb-1">상태</label><select value={taskFormData.status || 'todo'} onChange={e => setTaskFormData({...taskFormData, status: e.target.value})} className="w-full px-3 py-2 border rounded-lg bg-white"><option value="todo">진행 예정</option><option value="in-progress">진행 중</option><option value="done">완료됨</option></select></div>
-                <div><label className="block text-sm font-bold mb-1">시작일</label><input type="date" value={taskFormData.startDate || ''} onChange={e => setTaskFormData({...taskFormData, startDate: e.target.value})} className="w-full px-3 py-2 border rounded-lg" /></div>
-                <div><label className="block text-sm font-bold mb-1">목표일</label><input type="date" value={taskFormData.targetDate || ''} onChange={e => setTaskFormData({...taskFormData, targetDate: e.target.value})} className="w-full px-3 py-2 border rounded-lg" /></div>
+                <div className="col-span-2"><label className="block text-sm font-bold mb-1">소속 프로젝트</label><select value={taskFormData.projectId || ''} onChange={e => setTaskFormData({ ...taskFormData, projectId: e.target.value })} className="w-full px-3 py-2 border rounded-lg bg-white outline-none"><option value="">선택 안 함</option>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
+                <div><label className="block text-sm font-bold mb-1">담당자</label><select value={taskFormData.assignee || ''} onChange={e => setTaskFormData({ ...taskFormData, assignee: e.target.value })} className="w-full px-3 py-2 border rounded-lg bg-white"><option value="">선택 안 함</option>{members.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}</select></div>
+                <div><label className="block text-sm font-bold mb-1">상태</label><select value={taskFormData.status || 'todo'} onChange={e => setTaskFormData({ ...taskFormData, status: e.target.value })} className="w-full px-3 py-2 border rounded-lg bg-white"><option value="todo">진행 예정</option><option value="in-progress">진행 중</option><option value="done">완료됨</option></select></div>
+                <div><label className="block text-sm font-bold mb-1">시작일</label><input type="date" value={taskFormData.startDate || ''} onChange={e => setTaskFormData({ ...taskFormData, startDate: e.target.value })} className="w-full px-3 py-2 border rounded-lg" /></div>
+                <div><label className="block text-sm font-bold mb-1">목표일</label><input type="date" value={taskFormData.targetDate || ''} onChange={e => setTaskFormData({ ...taskFormData, targetDate: e.target.value })} className="w-full px-3 py-2 border rounded-lg" /></div>
               </div>
               <div>
-                <div className="flex justify-between items-center mb-1"><label className="block text-sm font-bold">상세 설명</label><button type="button" onClick={polishDescriptionAI} className="text-xs bg-indigo-50 text-indigo-600 px-2 py-1 rounded border border-indigo-100 font-bold flex items-center gap-1 hover:bg-indigo-100"><Sparkles className="w-3 h-3"/> AI 문장 다듬기</button></div>
-                <textarea value={taskFormData.description || ''} onChange={e => setTaskFormData({...taskFormData, description: e.target.value})} className="w-full px-3 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-indigo-500" rows="3"/>
+                <div className="flex justify-between items-center mb-1"><label className="block text-sm font-bold">상세 설명</label><button type="button" onClick={polishDescriptionAI} className="text-xs bg-indigo-50 text-indigo-600 px-2 py-1 rounded border border-indigo-100 font-bold flex items-center gap-1 hover:bg-indigo-100"><Sparkles className="w-3 h-3" /> AI 문장 다듬기</button></div>
+                <textarea value={taskFormData.description || ''} onChange={e => setTaskFormData({ ...taskFormData, description: e.target.value })} className="w-full px-3 py-2 border rounded-lg outline-none focus:ring-2 focus:ring-indigo-500" rows="3" />
               </div>
               <div className="border-t pt-5">
                 <div className="flex justify-between items-center mb-3">
                   <h4 className="font-bold">하위 업무</h4>
-                  <button type="button" onClick={generateSubtasksAI} className="text-xs bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 hover:bg-indigo-100"><Sparkles className="w-3 h-3"/> AI 업무 추천</button>
+                  <button type="button" onClick={generateSubtasksAI} className="text-xs bg-indigo-50 text-indigo-600 px-3 py-1.5 rounded-lg font-bold flex items-center gap-1 hover:bg-indigo-100"><Sparkles className="w-3 h-3" /> AI 업무 추천</button>
                 </div>
                 <div className="flex gap-2 mb-3">
-                  <input type="text" value={newSubtaskTitle || ''} onChange={e => setNewSubtaskTitle(e.target.value)} onKeyDown={e => {if(e.key === 'Enter') {e.preventDefault(); if(!newSubtaskTitle.trim())return; setTaskFormData({...taskFormData, subtasks: [...(taskFormData.subtasks || []), {id: Date.now().toString(), title: newSubtaskTitle, completed: false}]}); setNewSubtaskTitle('');}}} className="flex-1 px-3 py-2 border rounded-lg text-sm" placeholder="작업 입력 후 Enter"/>
+                  <input type="text" value={newSubtaskTitle || ''} onChange={e => setNewSubtaskTitle(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); if (!newSubtaskTitle.trim()) return; setTaskFormData({ ...taskFormData, subtasks: [...(taskFormData.subtasks || []), { id: Date.now().toString(), title: newSubtaskTitle, completed: false }] }); setNewSubtaskTitle(''); } }} className="flex-1 px-3 py-2 border rounded-lg text-sm" placeholder="작업 입력 후 Enter" />
                 </div>
                 <ul className="space-y-2">
                   {taskFormData.subtasks?.map((sub, idx) => (
-                    <li key={sub.id} draggable onDragStart={(e) => handleDragStart(e, idx)} onDragEnter={(e) => handleDragEnter(e, idx)} onDragOver={(e)=>e.preventDefault()} onDragEnd={handleDragEnd} className="flex items-center gap-3 p-2 border rounded-lg bg-slate-50">
-                      <GripVertical className="w-4 h-4 text-slate-400 cursor-grab"/>
-                      <input type="checkbox" checked={sub.completed} onChange={() => setTaskFormData({...taskFormData, subtasks: taskFormData.subtasks.map(s => s.id === sub.id ? {...s, completed: !s.completed} : s)})} className="w-4 h-4 rounded text-indigo-600"/>
+                    <li key={sub.id} draggable onDragStart={(e) => handleDragStart(e, idx)} onDragEnter={(e) => handleDragEnter(e, idx)} onDragOver={(e) => e.preventDefault()} onDragEnd={handleDragEnd} className="flex items-center gap-3 p-2 border rounded-lg bg-slate-50">
+                      <GripVertical className="w-4 h-4 text-slate-400 cursor-grab" />
+                      <input type="checkbox" checked={sub.completed} onChange={() => setTaskFormData({ ...taskFormData, subtasks: taskFormData.subtasks.map(s => s.id === sub.id ? { ...s, completed: !s.completed } : s) })} className="w-4 h-4 rounded text-indigo-600" />
                       <span className={`flex-1 text-sm ${sub.completed ? 'line-through text-slate-400' : ''}`}>{sub.title}</span>
-                      <button type="button" onClick={() => setTaskFormData({...taskFormData, subtasks: taskFormData.subtasks.filter(s => s.id !== sub.id)})} className="text-slate-400 hover:text-red-500"><Trash2 className="w-4 h-4"/></button>
+                      <button type="button" onClick={() => setTaskFormData({ ...taskFormData, subtasks: taskFormData.subtasks.filter(s => s.id !== sub.id) })} className="text-slate-400 hover:text-red-500"><Trash2 className="w-4 h-4" /></button>
                     </li>
                   ))}
                 </ul>
@@ -2206,27 +2246,22 @@ export default function App() {
       {isMemberModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-lg">
-            <div className="p-5 border-b flex justify-between items-center"><h3 className="font-bold text-lg">{editingMember ? '수정' : '등록'}</h3><button onClick={() => setIsMemberModalOpen(false)}><X className="w-5 h-5 text-slate-400"/></button></div>
+            <div className="p-5 border-b flex justify-between items-center"><h3 className="font-bold text-lg">{editingMember ? '수정' : '등록'}</h3><button onClick={() => setIsMemberModalOpen(false)}><X className="w-5 h-5 text-slate-400" /></button></div>
             <div className="p-5 space-y-4">
               <div className="grid grid-cols-2 gap-4">
-                <div><label className="block text-sm font-bold mb-1">이름 *</label><input type="text" value={memberFormData.name || ''} onChange={e => setMemberFormData({...memberFormData, name: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
-                <div><label className="block text-sm font-bold mb-1">직급</label><select value={memberFormData.rank || ''} onChange={e => setMemberFormData({...memberFormData, rank: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm">{RANKS.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
-                <div className="col-span-2"><label className="block text-sm font-bold mb-1">소속 부서</label><select value={memberFormData.departmentId || ''} onChange={e => setMemberFormData({...memberFormData, departmentId: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm bg-white"><option value="">-- 선택 안 함 --</option>{departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
-                <div className="col-span-2"><label className="block text-sm font-bold mb-1">직무</label><input type="text" value={memberFormData.role || ''} onChange={e => setMemberFormData({...memberFormData, role: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
-                <div><label className="block text-sm font-bold mb-1">입사일</label><input type="date" value={memberFormData.joinDate || ''} onChange={e => setMemberFormData({...memberFormData, joinDate: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
-	                <div><label className="block text-sm font-bold mb-1">최근 진급일</label><input type="date" value={memberFormData.promotionDate || ''} onChange={e => setMemberFormData({...memberFormData, promotionDate: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
-	                <div className="col-span-2 bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2.5">
-	                  <span className="block text-xs font-bold text-indigo-500 mb-1">다음 진급일</span>
-	                  <span className="text-sm font-black text-indigo-800">
-	                    {formatDateLabel(calculateNextPromotionDate(memberFormData.rank, memberFormData.joinDate, memberFormData.promotionDate))}
-	                  </span>
-	                </div>
-	                <div className="col-span-2"><label className="block text-sm font-bold mb-1">생일</label><input type="date" value={memberFormData.birthday || ''} onChange={e => setMemberFormData({...memberFormData, birthday: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
-                  <div><label className="block text-sm font-bold mb-1">연차 입력</label><input type="number" step="0.5" value={memberFormData.annualLeaveBase ?? ''} onChange={e => setMemberFormData({...memberFormData, annualLeaveBase: e.target.value})} placeholder={String(calculateStatutoryAnnualLeave(memberFormData.joinDate))} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
-                  <div className="bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2.5">
-                    <span className="block text-xs font-bold text-emerald-500 mb-1">기준 부여 연차</span>
-                    <span className="text-sm font-black text-emerald-800">{formatLeaveDays(getAnnualLeaveBase(memberFormData))}</span>
-                  </div>
+                <div><label className="block text-sm font-bold mb-1">이름 *</label><input type="text" value={memberFormData.name || ''} onChange={e => setMemberFormData({ ...memberFormData, name: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
+                <div><label className="block text-sm font-bold mb-1">직급</label><select value={memberFormData.rank || ''} onChange={e => setMemberFormData({ ...memberFormData, rank: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm">{RANKS.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
+                <div className="col-span-2"><label className="block text-sm font-bold mb-1">소속 부서</label><select value={memberFormData.departmentId || ''} onChange={e => setMemberFormData({ ...memberFormData, departmentId: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm bg-white"><option value="">-- 선택 안 함 --</option>{departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
+                <div className="col-span-2"><label className="block text-sm font-bold mb-1">직무</label><input type="text" value={memberFormData.role || ''} onChange={e => setMemberFormData({ ...memberFormData, role: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
+                <div><label className="block text-sm font-bold mb-1">입사일</label><input type="date" value={memberFormData.joinDate || ''} onChange={e => setMemberFormData({ ...memberFormData, joinDate: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
+                <div><label className="block text-sm font-bold mb-1">최근 진급일</label><input type="date" value={memberFormData.promotionDate || ''} onChange={e => setMemberFormData({ ...memberFormData, promotionDate: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
+                <div className="col-span-2 bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2.5">
+                  <span className="block text-xs font-bold text-indigo-500 mb-1">다음 진급일</span>
+                  <span className="text-sm font-black text-indigo-800">
+                    {formatDateLabel(calculateNextPromotionDate(memberFormData.rank, memberFormData.joinDate, memberFormData.promotionDate))}
+                  </span>
+                </div>
+                <div className="col-span-2"><label className="block text-sm font-bold mb-1">생일</label><input type="date" value={memberFormData.birthday || ''} onChange={e => setMemberFormData({ ...memberFormData, birthday: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
               </div>
             </div>
             <div className="p-4 border-t bg-slate-50 flex justify-between rounded-b-2xl">{editingMember ? <button onClick={() => deleteMember(editingMember.id)} className="text-red-500 font-bold px-2 text-sm">삭제</button> : <div></div>}<div className="flex gap-2"><button onClick={() => setIsMemberModalOpen(false)} className="px-4 py-2 border rounded-lg text-sm font-bold bg-white">취소</button><button onClick={handleMemberSubmit} className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-bold">저장</button></div></div>
@@ -2237,9 +2272,9 @@ export default function App() {
       {isOrgModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-sm">
-            <div className="p-5 border-b flex justify-between items-center"><h3 className="font-bold text-lg">부서 추가</h3><button onClick={() => setIsOrgModalOpen(false)}><X className="w-5 h-5 text-slate-400"/></button></div>
+            <div className="p-5 border-b flex justify-between items-center"><h3 className="font-bold text-lg">부서 추가</h3><button onClick={() => setIsOrgModalOpen(false)}><X className="w-5 h-5 text-slate-400" /></button></div>
             <form onSubmit={handleOrgSubmit}>
-              <div className="p-5"><label className="block text-sm font-bold mb-1">부서명 *</label><input type="text" required value={orgFormData.name} onChange={e => setOrgFormData({...orgFormData, name: e.target.value})} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
+              <div className="p-5"><label className="block text-sm font-bold mb-1">부서명 *</label><input type="text" required value={orgFormData.name} onChange={e => setOrgFormData({ ...orgFormData, name: e.target.value })} className="w-full px-3 py-2 border rounded-lg text-sm" /></div>
               <div className="p-4 border-t bg-slate-50 flex justify-end gap-2 rounded-b-2xl"><button type="button" onClick={() => setIsOrgModalOpen(false)} className="px-4 py-2 border bg-white rounded-lg text-sm font-bold">취소</button><button type="submit" className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-sm font-bold">추가</button></div>
             </form>
           </div>
@@ -2249,7 +2284,7 @@ export default function App() {
       {isKeyModalOpen && (
         <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6">
-            <h3 className="font-bold text-lg mb-2 flex items-center gap-2"><Key className="w-5 h-5 text-indigo-600"/> Gemini API 키 설정</h3>
+            <h3 className="font-bold text-lg mb-2 flex items-center gap-2"><Key className="w-5 h-5 text-indigo-600" /> Gemini API 키 설정</h3>
             <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} className="w-full px-3 py-2 border rounded-lg mb-6 mt-4" />
             <div className="flex justify-end gap-2"><button onClick={() => setIsKeyModalOpen(false)} className="px-4 py-2 bg-slate-100 rounded-lg font-bold text-sm">닫기</button><button onClick={() => { localStorage.setItem('gemini_api_key', apiKey); setIsKeyModalOpen(false); showAlert('저장 완료', 'API 키가 저장되었습니다.'); }} className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold text-sm">저장</button></div>
           </div>
