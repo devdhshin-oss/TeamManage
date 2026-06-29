@@ -833,10 +833,12 @@ export default function App() {
     const dataToSave = colName === 'workspaces' ? normalizeWorkspaceData({ ...data, id }) : data;
     try {
       await setDoc(doc(db, ...getPath(colName), id), dataToSave);
-      if (colName === 'workspaces') {
-        await syncWorkspaceAccessDocs(dataToSave);
-      }
+      // 로컬 상태 먼저 업데이트 (UI 즉시 반영)
       syncLocalCollection(colName, id, dataToSave);
+      // workspaceAccess 동기화는 백그라운드에서 실행 (UI 블로킹 방지)
+      if (colName === 'workspaces') {
+        syncWorkspaceAccessDocs(dataToSave).catch(console.error);
+      }
     } catch (e) { 
       console.error(e); 
       showAlert("저장 실패", `클라우드 저장에 실패했습니다. (사유: ${e.message || e})`); 
@@ -1147,20 +1149,44 @@ export default function App() {
     const updatedWorkspace = normalizeWorkspaceData({ ...workspace, members: updatedMembers });
     await saveToFirebase('workspaces', workspace.id, updatedWorkspace);
 
-    // workspaceAccess doc 생성 (pending 상태)
+    // workspaceAccess doc 생성 (pending 상태) - 백그라운드에서 createWorkspaceAccessData가 처리하지만 명시적으로 생성
     const accessData = createWorkspaceAccessData(updatedWorkspace, email);
     const docRef = doc(db, ...getPath('workspaceAccess'), accessData.id);
     const existing = await getDoc(docRef);
     if (!existing.exists()) {
       await setDoc(docRef, accessData);
     }
-    // 로컬 상태 업데이트: docId 키 + workspaceId_email 키 모두 저장
+    // 로컬 상태 업데이트
     const docKey = `${workspace.id}_${email}`;
     setInviteAccessDocs(prev => ({ ...prev, [docKey]: existing.exists() ? (existing.data().status ?? 'pending') : 'pending' }));
 
+    // 팀원관리 화면에 나타나도록 members 컬렉션에 최소 레코드 생성 (없는 경우)
+    const existingMember = allMembers.find(
+      m => normalizeEmail(m.email) === email && m.workspaceId === workspace.id
+    );
+    if (!existingMember) {
+      const memberId = `member_invite_${Date.now()}`;
+      const memberData = {
+        id: memberId,
+        workspaceId: workspace.id,
+        name: email.split('@')[0],
+        email,
+        rank: '',
+        departmentId: '',
+        role: '',
+        joinDate: '',
+        promotionDate: '',
+        birthday: '',
+        phone: '',
+        annualLeaveBase: '',
+        isAdmin: false
+      };
+      await saveToFirebase('members', memberId, memberData);
+    }
+
     setInviteWs(updatedWorkspace);
     setInviteEmail('');
-    showAlert('초대 완료', `${email} 사용자를 성공적으로 초대했습니다.`);
+    showAlert('초대 완료', `${email} 사용자를 성공적으로 초대했습니다.\n팀원관리 화면에서 정보를 추가해주세요.`);
   };
 
   const handleRemoveMember = async (emailToRemove, workspace = inviteWs) => {
@@ -1180,14 +1206,21 @@ export default function App() {
     try {
       const docRef = doc(db, ...getPath('workspaceAccess'), invite.id);
       await setDoc(docRef, { status: 'accepted' }, { merge: true });
+
+      // 워크스페이스를 Firestore에서 직접 로드하여 로컬 상태에 추가
+      const wsDocRef = doc(db, ...getPath('workspaces'), invite.workspaceId);
+      const wsSnap = await getDoc(wsDocRef);
+      if (wsSnap.exists()) {
+        const wsData = normalizeWorkspaceData({ id: wsSnap.id, ...wsSnap.data() });
+        setAllWorkspaces(prev => {
+          const exists = prev.some(w => w.id === wsData.id);
+          return exists ? prev.map(w => w.id === wsData.id ? wsData : w) : [...prev, wsData];
+        });
+      }
+
       setPendingInvites(prev => prev.filter(i => i.id !== invite.id));
       setInviteAccessDocs(prev => ({ ...prev, [invite.workspaceId]: 'accepted' }));
-      // 워크스페이스 목록 새로고침
-      setAllWorkspaces(prev => {
-        const ws = prev.find(w => w.id === invite.workspaceId);
-        return ws ? prev : prev; // 이미 있으면 유지, 없으면 loadWorkspaces가 처리
-      });
-      showAlert('초대 수락', `"${invite.workspaceName}" 워크스페이스에 참여했습니다!`);
+      showAlert('초대 수락', `"${invite.workspaceName}" 워크스페이스에 참여했습니다!\n좌측 상단에서 워크스페이스를 선택하세요.`);
     } catch (err) {
       console.error('초대 수락 실패:', err);
       showAlert('오류', '초대 수락에 실패했습니다. 다시 시도해주세요.');
