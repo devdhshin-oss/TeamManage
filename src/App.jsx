@@ -813,6 +813,8 @@ export default function App() {
   const handleGoogleAuth = async () => {
     setIsAuthLoading(true);
     try {
+      // 매번 계정 선택 화면을 강제 표시 (이전 계정 자동 로그인 방지)
+      googleProvider.setCustomParameters({ prompt: 'select_account' });
       const result = await signInWithPopup(auth, googleProvider);
       if (result.user?.email) {
         saveLastAuthEmail(result.user.email);
@@ -848,6 +850,8 @@ export default function App() {
       setActiveWorkspaceId(null);
       setAuthMode('login');
       setAuthForm({ email: lastEmail, password: '' });
+      // 로그아웃 후 다음 구글 로그인 시 반드시 계정 선택 화면 표시
+      googleProvider.setCustomParameters({ prompt: 'select_account' });
       await signOut(auth);
     });
   };
