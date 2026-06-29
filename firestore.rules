@@ -255,11 +255,11 @@ service cloud.firestore {
       }
 
       match /workspaceAccess/{accessId} {
-        // 소유자 또는 초대받은 본인이 읽기 가능
-        allow read: if signedIn() &&
-          (resource.data.email == userEmail() ||
-           isWorkspaceOwner(appId, resource.data.workspaceId));
-
+        // 초대받은 본인이 읽기 가능 (단일 조건으로 분리하여 쿼리 시 규칙 평가 오류 방지)
+        allow read: if signedIn() && resource.data.email == userEmail();
+        
+        // 워크스페이스 소유자가 읽기 가능
+        allow read: if signedIn() && isWorkspaceOwner(appId, resource.data.workspaceId);
         allow create: if validWorkspaceAccess(request.resource.data) &&
           request.resource.data.id == accessId &&
           request.resource.data.email == request.resource.data.email.lower() &&
