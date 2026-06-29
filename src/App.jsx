@@ -2107,53 +2107,51 @@ export default function App() {
                       <span className="text-xs font-bold text-slate-500 bg-white border border-slate-200 rounded-full px-2.5 py-1">{deptMembers.length}명</span>
                     </div>
                     {isExpanded && (
-                      <div className="p-5 bg-slate-50/30">
-                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-                          {deptMembers.map(m => {
-                            const age = calculateAge(m.birthday);
-                            const nextPromotionDate = calculateNextPromotionDate(m.rank, m.joinDate, m.promotionDate);
-                            const annualLeaveBase = getAnnualLeaveBase(m);
-                            const usedAnnualLeave = getUsedAnnualLeaveDays(m, annualLeaveEvents);
-                            const remainingAnnualLeave = annualLeaveBase - usedAnnualLeave;
-                            return (
-                              <div key={m.id} className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm relative group">
-                                <button onClick={() => handleOpenMemberModal(m)} className="absolute top-4 right-4 text-slate-300 hover:text-indigo-600 opacity-0 group-hover:opacity-100"><Edit2 className="w-4 h-4" /></button>
-                                <div className="text-center mb-5 mt-2">
-                                  <div className="w-16 h-16 bg-gradient-to-tr from-indigo-100 to-blue-50 text-indigo-600 rounded-full flex items-center justify-center text-xl font-black mx-auto mb-3">
-                                    {(m.name || '유').substring(0, 1)}
-                                  </div>
-                                  <h3 className="font-bold text-lg text-slate-800">{m.name}</h3>
-                                  <p className="text-sm text-slate-500 font-medium mt-1.5">
-                                    {m.rank} | {m.role}
-                                  </p>
-                                </div>
-                                <div className="grid grid-cols-2 gap-2 text-xs mb-4">
-                                  <div className="bg-slate-50 border border-slate-100 rounded-lg px-3 py-2">
-                                    <span className="block text-slate-400 font-bold mb-0.5">나이</span>
-                                    <span className="font-bold text-slate-700">{age ? `${age}세` : '-'}</span>
-                                  </div>
-                                  <div className="bg-indigo-50 border border-indigo-100 rounded-lg px-3 py-2">
-                                    <span className="block text-indigo-400 font-bold mb-0.5">다음 진급일</span>
-                                    <span className="font-bold text-indigo-700">{formatDateLabel(nextPromotionDate)}</span>
-                                  </div>
-                                  <div className="bg-emerald-50 border border-emerald-100 rounded-lg px-3 py-2">
-                                    <span className="block text-emerald-500 font-bold mb-0.5">잔여 연차</span>
-                                    <span className={`font-bold ${remainingAnnualLeave < 0 ? 'text-red-600' : 'text-emerald-700'}`}>{formatLeaveDays(remainingAnnualLeave)}</span>
-                                  </div>
-                                  <div className="bg-slate-50 border border-slate-100 rounded-lg px-3 py-2">
-                                    <span className="block text-slate-400 font-bold mb-0.5">부여/사용</span>
-                                    <span className="font-bold text-slate-700">{formatLeaveDays(annualLeaveBase)} / {formatLeaveDays(usedAnnualLeave)}</span>
-                                  </div>
-                                </div>
-                                <div className="mt-4 pt-4 border-t border-slate-100 flex gap-2">
-                                  <button onClick={() => generateGreetingAI(m, 'birthday')} className="flex-1 bg-slate-50 hover:bg-slate-100 py-2 rounded-lg text-xs font-bold flex justify-center text-slate-600">
-                                    <Cake className="w-3.5 h-3.5 mr-1" /> 생일 축하
-                                  </button>
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm min-w-[900px]">
+                          <thead className="bg-white border-b border-slate-100 text-xs text-slate-500">
+                            <tr>
+                              <th className="text-left px-4 py-3 font-bold">이름</th>
+                              <th className="text-left px-4 py-3 font-bold">직급</th>
+                              <th className="text-left px-4 py-3 font-bold">소속부서</th>
+                              <th className="text-left px-4 py-3 font-bold">직무</th>
+                              <th className="text-left px-4 py-3 font-bold">다음진급일</th>
+                              <th className="text-right px-4 py-3 font-bold">나이</th>
+                              <th className="text-right px-4 py-3 font-bold">잔여연차</th>
+                              <th className="text-right px-4 py-3 font-bold">관리</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {deptMembers.map(m => {
+                              const age = calculateAge(m.birthday);
+                              const nextPromotionDate = calculateNextPromotionDate(m.rank, m.joinDate, m.promotionDate);
+                              const annualLeaveBase = getAnnualLeaveBase(m);
+                              const usedAnnualLeave = getUsedAnnualLeaveDays(m, annualLeaveEvents);
+                              const remainingAnnualLeave = annualLeaveBase - usedAnnualLeave;
+                              return (
+                                <tr key={m.id} onDoubleClick={() => handleOpenMemberModal(m)} className="border-b border-slate-50 hover:bg-indigo-50/30 transition-colors">
+                                  <td className="px-4 py-3">
+                                    <button onClick={() => handleOpenMemberModal(m)} className="font-bold text-slate-800 hover:text-indigo-700 flex items-center gap-2">
+                                      <span className="w-7 h-7 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center text-xs font-black">{(m.name || '유').substring(0, 1)}</span>
+                                      {m.name || '-'}
+                                    </button>
+                                  </td>
+                                  <td className="px-4 py-3 font-semibold text-slate-600">{m.rank || '-'}</td>
+                                  <td className="px-4 py-3 text-slate-600">{dept.name}</td>
+                                  <td className="px-4 py-3 text-slate-600">{m.role || '-'}</td>
+                                  <td className="px-4 py-3 font-semibold text-indigo-700">{formatDateLabel(nextPromotionDate)}</td>
+                                  <td className="px-4 py-3 text-right font-semibold text-slate-700">{age ? `${age}세` : '-'}</td>
+                                  <td className={`px-4 py-3 text-right font-black ${remainingAnnualLeave < 0 ? 'text-red-600' : 'text-emerald-700'}`}>{formatLeaveDays(remainingAnnualLeave)}</td>
+                                  <td className="px-4 py-3 text-right">
+                                    <button onClick={() => handleOpenMemberModal(m)} className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 text-slate-500 hover:text-indigo-700 hover:bg-indigo-50 hover:border-indigo-200 text-xs font-bold">
+                                      <Edit2 className="w-3.5 h-3.5" /> 수정
+                                    </button>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
                       </div>
                     )}
                   </section>
