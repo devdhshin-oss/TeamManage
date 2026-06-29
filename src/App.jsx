@@ -164,8 +164,7 @@ const createWorkspaceAccessData = (workspace, email) => ({
   workspaceName: workspace.name || '',
   email: normalizeEmail(email),
   ownerId: workspace.ownerId || '',
-  createdAt: new Date().toISOString().split('T')[0],
-  status: 'pending'
+  createdAt: new Date().toISOString().split('T')[0]
 });
 
 const hashString = (value) => {
@@ -376,7 +375,6 @@ export default function App() {
 
   // 현재 선택된 워크스페이스
   const [activeWorkspaceIdState, setActiveWorkspaceIdState] = useState(null);
-  const [workspacesRefreshCounter, setWorkspacesRefreshCounter] = useState(0);
 
   const setActiveWorkspaceId = (id) => {
     setActiveWorkspaceIdState(id);
@@ -542,9 +540,6 @@ export default function App() {
   // 워크스페이스 초대 관련
   const [inviteWs, setInviteWs] = useState(null);
   const [inviteEmail, setInviteEmail] = useState('');
-  const [pendingInvites, setPendingInvites] = useState([]); // 내가 받은 미응답 초대 목록
-  const [showInviteNotification, setShowInviteNotification] = useState(false); // 초대 알림 모달
-  const [inviteAccessDocs, setInviteAccessDocs] = useState({}); // workspaceId -> accessDoc status 맵
 
   // AI & 기타
   const [apiKey, setApiKey] = useState(() => localStorage.getItem('gemini_api_key') || '');
@@ -710,7 +705,7 @@ export default function App() {
 
     loadWorkspaces();
     return () => { cancelled = true; };
-  }, [user, activeWorkspaceId, workspacesRefreshCounter]);
+  }, [user, activeWorkspaceId]);
 
   useEffect(() => {
     loadWorkspaceData();
@@ -718,15 +713,9 @@ export default function App() {
 
   const syncWorkspaceAccessDocs = async (workspace) => {
     const normalizedWorkspace = normalizeWorkspaceData(workspace);
-    await Promise.all(getWorkspaceEmails(normalizedWorkspace).map(async (email) => {
+    await Promise.all(getWorkspaceEmails(normalizedWorkspace).map(email => {
       const accessData = createWorkspaceAccessData(normalizedWorkspace, email);
-      // Preserve existing 'status' field (accepted/declined) instead of overwriting
-      const docRef = doc(db, ...getPath('workspaceAccess'), accessData.id);
-      const existing = await getDoc(docRef);
-      const finalData = existing.exists()
-        ? { ...accessData, status: existing.data().status ?? 'pending' }
-        : accessData;
-      return setDoc(docRef, finalData);
+      return setDoc(doc(db, ...getPath('workspaceAccess'), accessData.id), accessData);
     }));
   };
 
@@ -737,62 +726,6 @@ export default function App() {
       syncWorkspaceAccessDocs(ws).catch(console.error);
     });
   }, [user, myWorkspaces]);
-
-  // 초대받은 워크스페이스의 상태를 로드 (로그인한 사용자 이메일 기준)
-  useEffect(() => {
-    if (!user?.email) {
-      setPendingInvites([]);
-      setInviteAccessDocs({});
-      return;
-    }
-    const userEmail = normalizeEmail(user.email);
-    const loadInvites = async () => {
-      try {
-        const snap = await getDocs(
-          query(collection(db, ...getPath('workspaceAccess')), where('email', '==', userEmail))
-        );
-        const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-
-        // 상태 맵 업데이트 (workspaceId -> status)
-        const statusMap = {};
-        docs.forEach(d => { statusMap[d.workspaceId] = d.status ?? 'pending'; });
-        setInviteAccessDocs(statusMap);
-
-        // 소유자가 아닌 초대 중에 'pending' 상태인 것만 알림
-        const pending = docs.filter(d => d.ownerId !== user.uid && (d.status ?? 'pending') === 'pending');
-        setPendingInvites(pending);
-        if (pending.length > 0) setShowInviteNotification(true);
-      } catch (err) {
-        console.error('초대 목록 조회 실패:', err);
-      }
-    };
-    loadInvites();
-  }, [user]);
-
-  // 소유자가 멤버 초대 탭에서 각 이메일의 초대 상태를 실시간 반영
-  useEffect(() => {
-    if (!activeWorkspaceId || currentMenu !== 'workspaces' || !isCurrentWorkspaceOwner) return;
-    const currentWs = allWorkspaces.find(w => w.id === activeWorkspaceId);
-    if (!currentWs) return;
-    const emails = getWorkspaceEmails(currentWs).filter(e => e !== normalizeEmail(currentWs.ownerEmail));
-    if (emails.length === 0) return;
-
-    const loadStatuses = async () => {
-      const updates = {};
-      await Promise.all(emails.map(async (email) => {
-        try {
-          const docId = getWorkspaceAccessDocId(activeWorkspaceId, email);
-          const snap = await getDoc(doc(db, ...getPath('workspaceAccess'), docId));
-          const key = `${activeWorkspaceId}_${email}`;
-          updates[key] = snap.exists() ? (snap.data().status ?? 'pending') : 'pending';
-        } catch (err) {
-          console.error('상태 로드 실패:', err);
-        }
-      }));
-      setInviteAccessDocs(prev => ({ ...prev, ...updates }));
-    };
-    loadStatuses();
-  }, [activeWorkspaceId, currentMenu, isCurrentWorkspaceOwner, allWorkspaces]);
 
   useEffect(() => {
     if (!user || myWorkspaces.length === 0) {
@@ -834,12 +767,10 @@ export default function App() {
     const dataToSave = colName === 'workspaces' ? normalizeWorkspaceData({ ...data, id }) : data;
     try {
       await setDoc(doc(db, ...getPath(colName), id), dataToSave);
-      // 로컬 상태 먼저 업데이트 (UI 즉시 반영)
-      syncLocalCollection(colName, id, dataToSave);
-      // workspaceAccess 동기화는 백그라운드에서 실행 (UI 블로킹 방지)
       if (colName === 'workspaces') {
-        syncWorkspaceAccessDocs(dataToSave).catch(console.error);
+        await syncWorkspaceAccessDocs(dataToSave);
       }
+      syncLocalCollection(colName, id, dataToSave);
     } catch (e) { 
       console.error(e); 
       showAlert("저장 실패", `클라우드 저장에 실패했습니다. (사유: ${e.message || e})`); 
@@ -1150,44 +1081,9 @@ export default function App() {
     const updatedWorkspace = normalizeWorkspaceData({ ...workspace, members: updatedMembers });
     await saveToFirebase('workspaces', workspace.id, updatedWorkspace);
 
-    // workspaceAccess doc 생성 (pending 상태) - 백그라운드에서 createWorkspaceAccessData가 처리하지만 명시적으로 생성
-    const accessData = createWorkspaceAccessData(updatedWorkspace, email);
-    const docRef = doc(db, ...getPath('workspaceAccess'), accessData.id);
-    const existing = await getDoc(docRef);
-    if (!existing.exists()) {
-      await setDoc(docRef, accessData);
-    }
-    // 로컬 상태 업데이트
-    const docKey = `${workspace.id}_${email}`;
-    setInviteAccessDocs(prev => ({ ...prev, [docKey]: existing.exists() ? (existing.data().status ?? 'pending') : 'pending' }));
-
-    // 팀원관리 화면에 나타나도록 members 컬렉션에 최소 레코드 생성 (없는 경우)
-    const existingMember = allMembers.find(
-      m => normalizeEmail(m.email) === email && m.workspaceId === workspace.id
-    );
-    if (!existingMember) {
-      const memberId = `member_invite_${Date.now()}`;
-      const memberData = {
-        id: memberId,
-        workspaceId: workspace.id,
-        name: email.split('@')[0],
-        email,
-        rank: '',
-        departmentId: '',
-        role: '',
-        joinDate: '',
-        promotionDate: '',
-        birthday: '',
-        phone: '',
-        annualLeaveBase: '',
-        isAdmin: false
-      };
-      await saveToFirebase('members', memberId, memberData);
-    }
-
     setInviteWs(updatedWorkspace);
     setInviteEmail('');
-    showAlert('초대 완료', `${email} 사용자를 성공적으로 초대했습니다.\n팀원관리 화면에서 정보를 추가해주세요.`);
+    showAlert('초대 완료', `${email} 사용자를 성공적으로 초대했습니다.`);
   };
 
   const handleRemoveMember = async (emailToRemove, workspace = inviteWs) => {
@@ -1200,47 +1096,6 @@ export default function App() {
     await saveToFirebase('workspaces', workspace.id, updatedWorkspace);
     await deleteDoc(doc(db, ...getPath('workspaceAccess'), getWorkspaceAccessDocId(workspace.id, targetEmail)));
     setInviteWs(updatedWorkspace);
-  };
-
-  // 초대 수락
-  const handleAcceptInvite = async (invite) => {
-    try {
-      const docRef = doc(db, ...getPath('workspaceAccess'), invite.id);
-      await setDoc(docRef, { status: 'accepted' }, { merge: true });
-
-      setPendingInvites(prev => prev.filter(i => i.id !== invite.id));
-      setInviteAccessDocs(prev => ({ ...prev, [invite.workspaceId]: 'accepted' }));
-
-      // workspacesRefreshCounter 증가 → loadWorkspaces effect 재실행 → 수락된 워크스페이스 로드
-      setWorkspacesRefreshCounter(c => c + 1);
-
-      showAlert('초대 수락', `"${invite.workspaceName}" 워크스페이스에 참여했습니다!\n좌측 상단에서 워크스페이스를 선택하세요.`);
-    } catch (err) {
-      console.error('초대 수락 실패:', err);
-      showAlert('오류', '초대 수락에 실패했습니다. 다시 시도해주세요.');
-    }
-  };
-
-  // 초대 거부
-  const handleDeclineInvite = async (invite) => {
-    try {
-      const docRef = doc(db, ...getPath('workspaceAccess'), invite.id);
-      await setDoc(docRef, { status: 'declined' }, { merge: true });
-      // 워크스페이스 멤버에서도 제거
-      const ws = allWorkspaces.find(w => w.id === invite.workspaceId);
-      if (ws) {
-        const userEmail = normalizeEmail(user.email);
-        const updatedMembers = getWorkspaceEmails(ws).filter(e => e !== userEmail);
-        const updatedWorkspace = normalizeWorkspaceData({ ...ws, members: updatedMembers });
-        await saveToFirebase('workspaces', ws.id, updatedWorkspace);
-      }
-      setPendingInvites(prev => prev.filter(i => i.id !== invite.id));
-      setInviteAccessDocs(prev => ({ ...prev, [invite.workspaceId]: 'declined' }));
-      showAlert('초대 거부', `"${invite.workspaceName}" 초대를 거부했습니다.`);
-    } catch (err) {
-      console.error('초대 거부 실패:', err);
-      showAlert('오류', '초대 거부에 실패했습니다. 다시 시도해주세요.');
-    }
   };
 
   // --- 프로젝트 로직 ---
@@ -1984,67 +1839,6 @@ export default function App() {
             </div>
           </div>
         )}
-
-        {/* 초대 알림 모달 - 워크스페이스 선택 화면에서도 표출 */}
-        {showInviteNotification && pendingInvites.length > 0 && (
-          <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4 z-[110]">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-              <div className="bg-gradient-to-r from-indigo-600 to-purple-600 p-6 text-white">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
-                      <Mail className="w-5 h-5" />
-                    </div>
-                    <div>
-                      <h3 className="font-bold text-lg">워크스페이스 초대</h3>
-                      <p className="text-indigo-200 text-xs mt-0.5">새로운 초대가 {pendingInvites.length}건 도착했습니다</p>
-                    </div>
-                  </div>
-                  <button onClick={() => setShowInviteNotification(false)} className="w-8 h-8 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center transition-colors">
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-              </div>
-              <div className="p-6 space-y-3 max-h-80 overflow-y-auto">
-                {pendingInvites.map((invite) => (
-                  <div key={invite.id} className="border border-slate-200 rounded-xl p-4 bg-slate-50 hover:bg-indigo-50/50 transition-colors">
-                    <div className="flex items-start gap-3">
-                      <div className="w-10 h-10 bg-indigo-100 rounded-xl flex items-center justify-center flex-shrink-0">
-                        <Building className="w-5 h-5 text-indigo-600" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="font-bold text-slate-800 truncate">{invite.workspaceName || '워크스페이스'}</p>
-                        <p className="text-xs text-slate-500 mt-0.5">초대일: {invite.createdAt || '—'}</p>
-                        <div className="flex gap-2 mt-3">
-                          <button
-                            onClick={() => { handleAcceptInvite(invite); if (pendingInvites.filter(i => i.id !== invite.id).length === 0) setShowInviteNotification(false); }}
-                            className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold py-2 rounded-lg transition-colors flex items-center justify-center gap-1"
-                          >
-                            <CheckCircle2 className="w-3.5 h-3.5" /> 수락
-                          </button>
-                          <button
-                            onClick={() => { handleDeclineInvite(invite); if (pendingInvites.filter(i => i.id !== invite.id).length === 0) setShowInviteNotification(false); }}
-                            className="flex-1 bg-slate-200 hover:bg-red-100 text-slate-700 hover:text-red-600 text-xs font-bold py-2 rounded-lg transition-colors flex items-center justify-center gap-1"
-                          >
-                            <X className="w-3.5 h-3.5" /> 거부
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="px-6 pb-6">
-                <button
-                  onClick={() => setShowInviteNotification(false)}
-                  className="w-full py-2.5 text-slate-500 hover:text-slate-700 text-sm font-bold border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors"
-                >
-                  나중에 결정하기
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     );
   }
@@ -2151,24 +1945,6 @@ export default function App() {
                   const allowedEmails = getWorkspaceEmails(currentWs);
                   const ownerEmail = normalizeEmail(currentWs.ownerEmail);
 
-                  // 초대 상태 배지 렌더링 헬퍼
-                  const InviteStatusBadge = ({ email }) => {
-                    if (email === ownerEmail) return null;
-                    const docId = getWorkspaceAccessDocId(currentWs.id, email);
-                    // inviteAccessDocs는 workspaceId 기준이 아니라 docId 기준으로 관리
-                    // 소유자 본인의 워크스페이스에서는 타인 이메일의 상태를 조회
-                    const status = inviteAccessDocs[`${currentWs.id}_${email}`] ??
-                                   inviteAccessDocs[docId] ??
-                                   'pending';
-                    if (status === 'accepted') {
-                      return <span className="text-[11px] bg-emerald-100 text-emerald-700 font-bold px-2 py-0.5 rounded-full flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> 수락됨</span>;
-                    }
-                    if (status === 'declined') {
-                      return <span className="text-[11px] bg-red-100 text-red-600 font-bold px-2 py-0.5 rounded-full flex items-center gap-1"><X className="w-3 h-3" /> 거부됨</span>;
-                    }
-                    return <span className="text-[11px] bg-amber-100 text-amber-700 font-bold px-2 py-0.5 rounded-full flex items-center gap-1"><Clock className="w-3 h-3" /> 대기 중</span>;
-                  };
-
                   return (
                     <>
                       <div className="flex gap-2 mb-6">
@@ -2182,15 +1958,10 @@ export default function App() {
                         {allowedEmails.map((email, idx) => (
                           <div key={idx} className="flex items-center justify-between p-3 border border-slate-100 rounded-lg hover:bg-slate-50">
                             <div className="flex items-center gap-3">
-                              <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs uppercase ${email === ownerEmail ? 'bg-indigo-100 text-indigo-600' : 'bg-slate-200 text-slate-600'}`}>{email.substring(0, 1)}</div>
+                              <div className="w-8 h-8 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center font-bold text-xs uppercase">{email.substring(0, 1)}</div>
                               <div>
                                 <span className="font-bold text-slate-800 block text-sm">{email}</span>
-                                <div className="flex items-center gap-1.5 mt-0.5">
-                                  {email === ownerEmail
-                                    ? <span className="text-[10px] bg-emerald-100 text-emerald-700 font-bold px-1.5 py-0.5 rounded">소유자</span>
-                                    : <InviteStatusBadge email={email} />
-                                  }
-                                </div>
+                                {email === ownerEmail && <span className="text-[10px] bg-emerald-100 text-emerald-700 font-bold px-1.5 py-0.5 rounded">소유자</span>}
                               </div>
                             </div>
                             {isOwner && email !== ownerEmail && (
@@ -2764,66 +2535,6 @@ export default function App() {
             <h3 className="font-bold text-lg mb-2 flex items-center gap-2"><Key className="w-5 h-5 text-indigo-600" /> Gemini API 키 설정</h3>
             <input type="password" value={apiKey} onChange={e => setApiKey(e.target.value)} className="w-full px-3 py-2 border rounded-lg mb-6 mt-4" />
             <div className="flex justify-end gap-2"><button onClick={() => setIsKeyModalOpen(false)} className="px-4 py-2 bg-slate-100 rounded-lg font-bold text-sm">닫기</button><button onClick={() => { localStorage.setItem('gemini_api_key', apiKey); setIsKeyModalOpen(false); showAlert('저장 완료', 'API 키가 저장되었습니다.'); }} className="px-4 py-2 bg-indigo-600 text-white rounded-lg font-bold text-sm">저장</button></div>
-          </div>
-        </div>
-      )}
-      {/* 초대 알림 모달 - 초대받은 사용자가 로그인 시 표출 */}
-      {showInviteNotification && pendingInvites.length > 0 && (
-        <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4 z-[110]">
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md overflow-hidden">
-            <div className="bg-gradient-to-r from-indigo-600 to-purple-600 p-6 text-white">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
-                    <Mail className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-lg">워크스페이스 초대</h3>
-                    <p className="text-indigo-200 text-xs mt-0.5">새로운 초대가 {pendingInvites.length}건 도착했습니다</p>
-                  </div>
-                </div>
-                <button onClick={() => setShowInviteNotification(false)} className="w-8 h-8 bg-white/20 hover:bg-white/30 rounded-full flex items-center justify-center transition-colors">
-                  <X className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-            <div className="p-6 space-y-3 max-h-80 overflow-y-auto">
-              {pendingInvites.map((invite) => (
-                <div key={invite.id} className="border border-slate-200 rounded-xl p-4 bg-slate-50 hover:bg-indigo-50/50 transition-colors">
-                  <div className="flex items-start gap-3">
-                    <div className="w-10 h-10 bg-indigo-100 rounded-xl flex items-center justify-center flex-shrink-0">
-                      <Building className="w-5 h-5 text-indigo-600" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <p className="font-bold text-slate-800 truncate">{invite.workspaceName || '워크스페이스'}</p>
-                      <p className="text-xs text-slate-500 mt-0.5">초대일: {invite.createdAt || '—'}</p>
-                      <div className="flex gap-2 mt-3">
-                        <button
-                          onClick={() => { handleAcceptInvite(invite); if (pendingInvites.filter(i => i.id !== invite.id).length === 0) setShowInviteNotification(false); }}
-                          className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold py-2 rounded-lg transition-colors flex items-center justify-center gap-1"
-                        >
-                          <CheckCircle2 className="w-3.5 h-3.5" /> 수락
-                        </button>
-                        <button
-                          onClick={() => { handleDeclineInvite(invite); if (pendingInvites.filter(i => i.id !== invite.id).length === 0) setShowInviteNotification(false); }}
-                          className="flex-1 bg-slate-200 hover:bg-red-100 text-slate-700 hover:text-red-600 text-xs font-bold py-2 rounded-lg transition-colors flex items-center justify-center gap-1"
-                        >
-                          <X className="w-3.5 h-3.5" /> 거부
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-            <div className="px-6 pb-6">
-              <button
-                onClick={() => setShowInviteNotification(false)}
-                className="w-full py-2.5 text-slate-500 hover:text-slate-700 text-sm font-bold border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors"
-              >
-                나중에 결정하기
-              </button>
-            </div>
           </div>
         </div>
       )}
