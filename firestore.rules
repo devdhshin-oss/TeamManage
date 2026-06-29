@@ -140,7 +140,7 @@ service cloud.firestore {
     }
 
     function validWorkspaceAccess(data) {
-      return hasOnly(data, ['id', 'workspaceId', 'workspaceName', 'email', 'ownerId', 'createdAt']) &&
+      return hasOnly(data, ['id', 'workspaceId', 'workspaceName', 'email', 'ownerId', 'createdAt', 'status']) &&
         hasRequired(data, ['id', 'workspaceId', 'email', 'ownerId']) &&
         data.id is string &&
         data.id.size() > 0 &&
@@ -154,7 +154,8 @@ service cloud.firestore {
         data.ownerId is string &&
         data.ownerId.size() > 0 &&
         optionalString(data, 'workspaceName', 80) &&
-        optionalString(data, 'createdAt', 20);
+        optionalString(data, 'createdAt', 20) &&
+        optionalString(data, 'status', 20);
     }
 
     function validTask(data) {
@@ -254,8 +255,10 @@ service cloud.firestore {
       }
 
       match /workspaceAccess/{accessId} {
+        // 소유자 또는 초대받은 본인이 읽기 가능
         allow read: if signedIn() &&
-          resource.data.email == userEmail();
+          (resource.data.email == userEmail() ||
+           isWorkspaceOwner(appId, resource.data.workspaceId));
 
         allow create: if validWorkspaceAccess(request.resource.data) &&
           request.resource.data.id == accessId &&
@@ -263,12 +266,22 @@ service cloud.firestore {
           isWorkspaceOwner(appId, request.resource.data.workspaceId) &&
           request.resource.data.ownerId == request.auth.uid;
 
+        // 워크스페이스 소유자: 전체 업데이트 가능
         allow update: if validWorkspaceAccess(request.resource.data) &&
           request.resource.data.id == resource.data.id &&
           request.resource.data.workspaceId == resource.data.workspaceId &&
           request.resource.data.email == resource.data.email &&
           isWorkspaceOwner(appId, resource.data.workspaceId) &&
           request.resource.data.ownerId == resource.data.ownerId;
+
+        // 초대받은 본인: status 필드만 변경 가능 (수락/거부)
+        allow update: if signedIn() &&
+          resource.data.email == userEmail() &&
+          request.resource.data.id == resource.data.id &&
+          request.resource.data.workspaceId == resource.data.workspaceId &&
+          request.resource.data.email == resource.data.email &&
+          request.resource.data.ownerId == resource.data.ownerId &&
+          request.resource.data.status in ['pending', 'accepted', 'declined'];
 
         allow delete: if isWorkspaceOwner(appId, resource.data.workspaceId);
       }
