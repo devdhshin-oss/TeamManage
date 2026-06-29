@@ -514,7 +514,6 @@ export default function App() {
   const [isWsModalOpen, setIsWsModalOpen] = useState(false);
   const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
   const [isKeyModalOpen, setIsKeyModalOpen] = useState(false);
-  const [isDataModalOpen, setIsDataModalOpen] = useState(false);
   const [customAlert, setCustomAlert] = useState({ isOpen: false, title: '', message: '', onConfirm: null, isConfirm: false, isWide: false });
 
   // 폼 상태
@@ -932,52 +931,7 @@ export default function App() {
     if (result) showAlert(`🎉 ${typeText} 축하 메시지 초안`, result, true);
   };
 
-  // --- 데이터 백업 및 복원 ---
-  const handleExportData = () => {
-    const dataToSave = { tasks: allTasks, members: allMembers, departments: allDepartments, workspaces: allWorkspaces, projects: allProjects };
-    const jsonStr = JSON.stringify(dataToSave, null, 2);
-    const blob = new Blob([jsonStr], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `TeamSpace_Backup_${new Date().toISOString().slice(0, 10)}.json`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    setIsDataModalOpen(false);
-    showAlert('백업 완료', '전체 데이터가 성공적으로 다운로드되었습니다.');
-  };
 
-  const handleImportData = (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = async (event) => {
-      try {
-        const parsedData = JSON.parse(event.target.result);
-        if (parsedData.tasks && parsedData.members && parsedData.departments) {
-          showConfirm('데이터 업로드(복원)', '파일의 데이터를 클라우드 데이터베이스에 모두 업로드하시겠습니까?\n이 데이터는 즉시 덮어씌워지며 모두에게 공유됩니다.', async () => {
-            setIsDataModalOpen(false);
-            setIsAiLoading(true);
-            for (const ws of parsedData.workspaces || []) await saveToFirebase('workspaces', ws.id, ws);
-            for (const p of parsedData.projects || []) await saveToFirebase('projects', p.id, p);
-            for (const t of parsedData.tasks) await saveToFirebase('tasks', t.id, t);
-            for (const m of parsedData.members) await saveToFirebase('members', m.id, m);
-            for (const d of parsedData.departments) await saveToFirebase('departments', d.id, d);
-            setIsAiLoading(false);
-            showAlert('클라우드 업로드 완료', '모든 데이터가 성공적으로 클라우드에 복원되었습니다!');
-          });
-        } else {
-          showAlert('복원 실패', '올바른 백업 파일 형식이 아닙니다.');
-        }
-      } catch (error) {
-        showAlert('복원 실패', '파일을 읽는 중 오류가 발생했습니다.');
-      }
-    };
-    reader.readAsText(file);
-    e.target.value = '';
-  };
 
   const persistGoogleCalendarConfig = (nextConfig) => {
     setGoogleCalendarConfig(nextConfig);
@@ -1838,11 +1792,7 @@ export default function App() {
           )}
         </div>
 
-        <div className="text-center flex justify-center gap-4 mt-12">
-          <button onClick={() => setIsDataModalOpen(true)} className="flex items-center gap-2 px-6 py-3 bg-white border border-slate-200 rounded-full text-slate-600 font-bold hover:bg-slate-50 shadow-sm transition-colors">
-            <Database className="w-4 h-4" /> 전체 데이터 백업 / 복원
-          </button>
-        </div>
+
 
         {/* 워크스페이스 생성/수정 모달 */}
         {isWsModalOpen && (
@@ -1875,27 +1825,7 @@ export default function App() {
           </div>
         )}
 
-        {/* 공통 컴포넌트: 백업/복원 및 알림 모달 */}
-        {isDataModalOpen && (
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 text-left">
-            <div className="bg-white rounded-2xl shadow-xl w-full max-w-md">
-              <div className="p-5 border-b flex justify-between items-center"><h3 className="font-bold text-lg flex items-center gap-2"><Database className="w-5 h-5 text-indigo-600" /> 시스템 전체 데이터 백업/복원</h3><button onClick={() => setIsDataModalOpen(false)}><X className="w-5 h-5 text-slate-400" /></button></div>
-              <div className="p-6 space-y-6">
-                <div className="bg-indigo-50 border border-indigo-100 rounded-xl p-4">
-                  <h4 className="font-bold text-indigo-900 mb-2 flex items-center gap-2"><Save className="w-4 h-4" /> 내 PC로 데이터 내보내기</h4>
-                  <p className="text-sm text-indigo-700/80 mb-4">생성된 모든 조직 공간(워크스페이스)의 데이터를 JSON으로 다운로드합니다.</p>
-                  <button onClick={handleExportData} className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 rounded-lg text-sm">백업 파일 다운로드</button>
-                </div>
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
-                  <h4 className="font-bold text-slate-800 mb-2 flex items-center gap-2"><Upload className="w-4 h-4" /> 다른 PC에서 데이터 불러오기</h4>
-                  <p className="text-sm text-slate-500 mb-4">다운로드한 JSON 파일을 선택하여 전체 시스템 데이터를 덮어씁니다.</p>
-                  <input type="file" accept=".json" ref={fileInputRef} onChange={handleImportData} className="hidden" />
-                  <button onClick={() => fileInputRef.current.click()} className="w-full bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 font-bold py-2.5 rounded-lg text-sm">백업 파일 선택하기</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
+
 
         {customAlert.isOpen && (
           <div className="fixed inset-0 bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4 z-[100] text-left">
