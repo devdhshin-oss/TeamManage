@@ -48,6 +48,11 @@ const getLastAuthEmail = () => {
   return localStorage.getItem(LAST_AUTH_EMAIL_KEY) || '';
 };
 
+const isLocalTestHost = () => {
+  if (typeof window === 'undefined') return false;
+  return ['localhost', '127.0.0.1', '::1'].includes(window.location.hostname);
+};
+
 const saveLastAuthEmail = (email) => {
   if (typeof localStorage === 'undefined') return;
   const trimmedEmail = email?.trim();
@@ -180,6 +185,18 @@ const hashString = (value) => {
 };
 
 const getAssigneeColor = (assignee) => ASSIGNEE_COLORS[hashString(assignee) % ASSIGNEE_COLORS.length];
+
+const getInviteStatusLabel = (status = 'pending') => {
+  if (status === 'accepted') return '참여 중';
+  if (status === 'declined') return '거부됨';
+  return '초대 대기';
+};
+
+const getInviteStatusClass = (status = 'pending') => {
+  if (status === 'accepted') return 'bg-emerald-100 text-emerald-700 border-emerald-200';
+  if (status === 'declined') return 'bg-slate-100 text-slate-500 border-slate-200';
+  return 'bg-amber-100 text-amber-700 border-amber-200';
+};
 
 // --- 헬퍼 함수 ---
 const calculateAge = (birthday) => {
@@ -373,6 +390,7 @@ export default function App() {
   const [allDepartments, setAllDepartments] = useState([]);
   const [allWorkspaces, setAllWorkspaces] = useState([]);
   const [allProjects, setAllProjects] = useState([]);
+  const [workspaceAccessList, setWorkspaceAccessList] = useState([]);
   const [workspaceStats, setWorkspaceStats] = useState({});
 
   // 현재 선택된 워크스페이스
@@ -429,6 +447,25 @@ export default function App() {
   const members = useMemo(() => allMembers.filter(m => m.workspaceId === activeWorkspaceId), [allMembers, activeWorkspaceId]);
   const departments = useMemo(() => allDepartments.filter(d => d.workspaceId === activeWorkspaceId), [allDepartments, activeWorkspaceId]);
   const projects = useMemo(() => allProjects.filter(p => p.workspaceId === activeWorkspaceId), [allProjects, activeWorkspaceId]);
+  const invitedWorkspaceAccess = useMemo(() => {
+    const ownerEmail = normalizeEmail(currentWorkspace?.ownerEmail);
+    return workspaceAccessList
+      .filter(access => normalizeEmail(access.email) && normalizeEmail(access.email) !== ownerEmail)
+      .sort((a, b) => normalizeEmail(a.email).localeCompare(normalizeEmail(b.email)));
+  }, [workspaceAccessList, currentWorkspace]);
+  const isActiveWorkspaceParticipantEmail = useCallback((email) => {
+    const normalized = normalizeEmail(email);
+    if (!normalized || !currentWorkspace) return false;
+    if (normalized === normalizeEmail(currentWorkspace.ownerEmail)) return true;
+    if (getWorkspaceEmails(currentWorkspace).includes(normalized)) return true;
+    return workspaceAccessList.some(access => normalizeEmail(access.email) === normalized && access.status === 'accepted');
+  }, [currentWorkspace, workspaceAccessList]);
+  const getMemberByName = useCallback((name) => members.find(member => member.name === name), [members]);
+  const isTaskAssigneeInactive = useCallback((assignee) => {
+    if (!assignee) return false;
+    const assignedMember = getMemberByName(assignee);
+    return Boolean(assignedMember?.email && !isActiveWorkspaceParticipantEmail(assignedMember.email));
+  }, [getMemberByName, isActiveWorkspaceParticipantEmail]);
 
   // UI 상태
   const [searchQuery, setSearchQuery] = useState('');
@@ -606,10 +643,8 @@ export default function App() {
 
     const scopedQuery = (colName) => query(collection(db, ...getPath(colName)), where('workspaceId', '==', activeWorkspaceId));
     try {
-      const collectionsToLoad = new Set(['tasks', 'projects']);
-      if (currentMenu === 'calendar') collectionsToLoad.add('members');
+      const collectionsToLoad = new Set(['tasks', 'projects', 'members']);
       if (currentMenu === 'members' || currentMenu === 'org' || currentMenu === 'eval') {
-        collectionsToLoad.add('members');
         collectionsToLoad.add('departments');
       }
       if (currentMenu === 'eval') {
@@ -734,6 +769,30 @@ export default function App() {
     loadWorkspaceData();
   }, [loadWorkspaceData]);
 
+  useEffect(() => {
+    if (!user || !activeWorkspaceId || !isCurrentWorkspaceOwner) {
+      setWorkspaceAccessList([]);
+      return;
+    }
+
+    let cancelled = false;
+    const loadWorkspaceAccess = async () => {
+      try {
+        const snap = await getDocs(
+          query(collection(db, ...getPath('workspaceAccess')), where('workspaceId', '==', activeWorkspaceId))
+        );
+        const accessDocs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        if (!cancelled) setWorkspaceAccessList(accessDocs);
+      } catch (err) {
+        console.error('워크스페이스 접근 목록 로드 실패:', err);
+        if (!cancelled) setWorkspaceAccessList([]);
+      }
+    };
+
+    loadWorkspaceAccess();
+    return () => { cancelled = true; };
+  }, [user, activeWorkspaceId, isCurrentWorkspaceOwner, workspacesRefreshCounter]);
+
   const syncWorkspaceAccessDocs = async (workspace) => {
     const normalizedWorkspace = normalizeWorkspaceData(workspace);
     await Promise.all(getWorkspaceEmails(normalizedWorkspace).map(async (email) => {
@@ -849,6 +908,13 @@ export default function App() {
     setIsAuthLoading(true);
     const email = authForm.email.trim();
     try {
+      if (isLocalTestHost() && email === 'admin' && authForm.password === 'admin') {
+        localStorage.setItem('guest_mode', 'true');
+        await signInAnonymously(auth);
+        setAuthForm({ email: 'admin', password: '' });
+        return;
+      }
+
       if (authMode === 'login') {
         await signInWithEmailAndPassword(auth, email, authForm.password);
       } else {
@@ -1147,6 +1213,7 @@ export default function App() {
 
       setInviteWs(workspace);
       setInviteEmail('');
+      setWorkspaceAccessList(prev => replaceById(prev, accessData));
       showAlert('초대 완료', `${email} 사용자를 성공적으로 초대했습니다.`);
     } catch (err) {
       console.error('초대 생성 실패:', err);
@@ -1159,11 +1226,38 @@ export default function App() {
     const targetEmail = normalizeEmail(emailToRemove);
     if (targetEmail === normalizeEmail(workspace.ownerEmail)) return showAlert('불가', '소유자는 워크스페이스에서 제외할 수 없습니다.');
 
-    const updatedMembers = getWorkspaceEmails(workspace).filter(email => email !== targetEmail);
-    const updatedWorkspace = normalizeWorkspaceData({ ...workspace, members: updatedMembers });
-    await saveToFirebase('workspaces', workspace.id, updatedWorkspace);
-    await deleteDoc(doc(db, ...getPath('workspaceAccess'), getWorkspaceAccessDocId(workspace.id, targetEmail)));
-    setInviteWs(updatedWorkspace);
+    showConfirm('접근 권한 삭제', `${targetEmail} 사용자의 워크스페이스 접근 권한을 삭제할까요?\n작성된 업무와 팀원 정보는 유지됩니다.`, async () => {
+      try {
+        const updatedMembers = getWorkspaceEmails(workspace).filter(email => email !== targetEmail);
+        const updatedWorkspace = normalizeWorkspaceData({ ...workspace, members: updatedMembers });
+        await saveToFirebase('workspaces', workspace.id, updatedWorkspace);
+
+        const canonicalAccessId = getWorkspaceAccessDocId(workspace.id, targetEmail);
+        const accessDocsToDelete = workspaceAccessList.filter(access => (
+          access.workspaceId === workspace.id &&
+          normalizeEmail(access.email) === targetEmail
+        ));
+        const deleteIds = [...new Set([canonicalAccessId, ...accessDocsToDelete.map(access => access.id)].filter(Boolean))];
+        await Promise.all(deleteIds.map(async (accessId) => {
+          try {
+            await deleteDoc(doc(db, ...getPath('workspaceAccess'), accessId));
+          } catch (err) {
+            console.error('workspaceAccess 삭제 실패:', accessId, err);
+          }
+        }));
+
+        setWorkspaceAccessList(prev => prev.filter(access => !(
+          access.workspaceId === workspace.id &&
+          normalizeEmail(access.email) === targetEmail
+        )));
+        setInviteWs(updatedWorkspace);
+        setWorkspacesRefreshCounter(c => c + 1);
+        showAlert('접근 권한 삭제 완료', `${targetEmail} 사용자는 더 이상 이 워크스페이스에 접근할 수 없습니다.`);
+      } catch (err) {
+        console.error('접근 권한 삭제 실패:', err);
+        showAlert('삭제 실패', `접근 권한을 삭제하지 못했습니다. (${err.message || err})`);
+      }
+    });
   };
 
   // 초대 수락
@@ -1649,6 +1743,7 @@ export default function App() {
     const isDragging = draggedTaskId === task.id;
     const project = projects.find(p => p.id === task.projectId) || { name: '미지정', color: 'slate' };
     const pColor = PROJECT_COLORS[project?.color] || PROJECT_COLORS['slate'];
+    const assigneeInactive = isTaskAssigneeInactive(task.assignee);
 
     return (
       <div
@@ -1690,7 +1785,11 @@ export default function App() {
         <h3 className="font-bold text-slate-800 mb-2 line-clamp-2">{task.title}</h3>
 
         <div className="flex justify-between items-center mb-3">
-          <span className="inline-flex items-center gap-1 text-slate-500 text-[11px] font-medium"><User className="w-3 h-3" /> {task.assignee || '미지정'}</span>
+          <span className="inline-flex flex-wrap items-center gap-1 text-slate-500 text-[11px] font-medium min-w-0">
+            <User className="w-3 h-3 shrink-0" />
+            <span className="truncate">{task.assignee || '미지정'}</span>
+            {assigneeInactive && <span className="text-[10px] bg-slate-100 text-slate-500 border border-slate-200 font-bold px-1.5 py-0.5 rounded-md">워크스페이스 참여자 아님</span>}
+          </span>
           {(task.startDate || task.targetDate) && (
             <div className="flex items-center gap-1 text-[11px] text-slate-400 font-medium">
               <Calendar className="w-3 h-3" /><span>{(task.startDate || '').slice(5)} ~ {(task.targetDate || '').slice(5)}</span>
@@ -1762,8 +1861,8 @@ export default function App() {
               </div>
 
               <div>
-                <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">이메일</label>
-                <input type="email" required value={authForm.email} onChange={e => setAuthForm({ ...authForm, email: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all" placeholder="name@company.com" autoComplete="off" />
+                <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">ID 또는 이메일</label>
+                <input type="text" required value={authForm.email} onChange={e => setAuthForm({ ...authForm, email: e.target.value })} className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none transition-all" placeholder="name@company.com 또는 admin" autoComplete="off" />
               </div>
               <div>
                 <label className="block text-xs font-bold text-slate-500 mb-1.5 uppercase tracking-wider">비밀번호</label>
@@ -2100,8 +2199,11 @@ export default function App() {
                   const currentWs = allWorkspaces.find(w => w.id === activeWorkspaceId);
                   if (!currentWs) return null;
                   const isOwner = currentWs.ownerId === user.uid;
-                  const allowedEmails = getWorkspaceEmails(currentWs);
                   const ownerEmail = normalizeEmail(currentWs.ownerEmail);
+                  const accessRows = [
+                    ownerEmail ? { id: `${currentWs.id}_owner`, email: ownerEmail, status: 'accepted', isOwner: true } : null,
+                    ...invitedWorkspaceAccess
+                  ].filter(Boolean);
 
                   return (
                     <>
@@ -2113,20 +2215,30 @@ export default function App() {
                       </div>
                       {!isOwner && <p className="text-sm text-red-500 mb-4 font-bold flex items-center gap-1"><AlertCircle className="w-4 h-4" /> 소유자만 팀원을 초대할 수 있습니다.</p>}
                       <div className="space-y-2">
-                        {allowedEmails.map((email, idx) => (
-                          <div key={idx} className="flex items-center justify-between p-3 border border-slate-100 rounded-lg hover:bg-slate-50">
+                        {accessRows.map((access) => {
+                          const email = normalizeEmail(access.email);
+                          return (
+                          <div key={access.id || email} className="flex items-center justify-between p-3 border border-slate-100 rounded-lg hover:bg-slate-50">
                             <div className="flex items-center gap-3">
                               <div className="w-8 h-8 rounded-full bg-slate-200 text-slate-600 flex items-center justify-center font-bold text-xs uppercase">{email.substring(0, 1)}</div>
                               <div>
                                 <span className="font-bold text-slate-800 block text-sm">{email}</span>
-                                {email === ownerEmail && <span className="text-[10px] bg-emerald-100 text-emerald-700 font-bold px-1.5 py-0.5 rounded">소유자</span>}
+                                <div className="flex flex-wrap gap-1.5 mt-1">
+                                  {access.isOwner && <span className="text-[10px] bg-emerald-100 text-emerald-700 font-bold px-1.5 py-0.5 rounded">소유자</span>}
+                                  {!access.isOwner && <span className={`text-[10px] border font-bold px-1.5 py-0.5 rounded ${getInviteStatusClass(access.status)}`}>{getInviteStatusLabel(access.status)}</span>}
+                                </div>
                               </div>
                             </div>
-                            {isOwner && email !== ownerEmail && (
+                            {isOwner && !access.isOwner && (
                               <button onClick={() => handleRemoveMember(email, currentWs)} className="text-sm font-bold text-red-500 hover:bg-red-50 px-3 py-1.5 rounded-lg">제외</button>
                             )}
                           </div>
-                        ))}
+                        )})}
+                        {accessRows.length === 0 && (
+                          <div className="py-8 text-center text-sm font-bold text-slate-400 border border-dashed border-slate-200 rounded-lg">
+                            초대된 계정이 없습니다.
+                          </div>
+                        )}
                       </div>
                     </>
                   );
@@ -2330,6 +2442,46 @@ export default function App() {
                 <button onClick={() => handleOpenMemberModal()} className="bg-indigo-600 text-white px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2"><Plus className="w-4 h-4" /> 팀원 등록</button>
               </div>
             </header>
+            <section className="bg-white border border-slate-200 rounded-2xl shadow-sm overflow-hidden mb-6">
+              <div className="px-5 py-4 bg-slate-50 border-b border-slate-100 flex items-center justify-between">
+                <div>
+                  <h2 className="font-black text-slate-800 flex items-center gap-2">
+                    <UserPlus className="w-4 h-4 text-indigo-600" />
+                    초대된 멤버
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-1">워크스페이스 접근 권한은 여기에서 관리합니다.</p>
+                </div>
+                <span className="text-xs font-bold text-slate-500 bg-white border border-slate-200 rounded-full px-2.5 py-1">{invitedWorkspaceAccess.length}명</span>
+              </div>
+              <div className="divide-y divide-slate-100">
+                {invitedWorkspaceAccess.map(access => {
+                  const email = normalizeEmail(access.email);
+                  const matchedMember = members.find(member => normalizeEmail(member.email) === email);
+                  return (
+                    <div key={access.id || email} className="px-5 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="w-9 h-9 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center font-black text-xs uppercase shrink-0">{email.substring(0, 1)}</div>
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-bold text-slate-800 text-sm truncate">{matchedMember?.name || email}</span>
+                            <span className={`text-[10px] border font-bold px-1.5 py-0.5 rounded ${getInviteStatusClass(access.status)}`}>{getInviteStatusLabel(access.status)}</span>
+                          </div>
+                          <p className="text-xs text-slate-500 truncate">{email}</p>
+                        </div>
+                      </div>
+                      <button onClick={() => handleRemoveMember(email, currentWorkspace)} className="self-start sm:self-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-red-100 text-red-500 hover:bg-red-50 text-xs font-bold">
+                        <Trash2 className="w-3.5 h-3.5" /> 접근 권한 삭제
+                      </button>
+                    </div>
+                  );
+                })}
+                {invitedWorkspaceAccess.length === 0 && (
+                  <div className="px-5 py-8 text-center text-sm font-bold text-slate-400">
+                    아직 초대된 멤버가 없습니다.
+                  </div>
+                )}
+              </div>
+            </section>
             <div className="space-y-6">
               {membersByDepartment.map(({ dept, members: deptMembers }) => {
                 const isExpanded = !!expandedDepartments[dept.id];
@@ -2386,14 +2538,16 @@ export default function App() {
                               const annualLeaveBase = getAnnualLeaveBase(m);
                               const usedAnnualLeave = getUsedAnnualLeaveDays(m, annualLeaveEvents);
                               const remainingAnnualLeave = annualLeaveBase - usedAnnualLeave;
+                              const isInactiveParticipant = Boolean(m.email && !isActiveWorkspaceParticipantEmail(m.email));
                               return (
                                 <tr key={m.id} onDoubleClick={() => handleOpenMemberModal(m)} className="border-b border-slate-50 hover:bg-indigo-50/30 transition-colors text-xs sm:text-sm">
                                   <td className="px-4 py-3">
                                     <button onClick={() => handleOpenMemberModal(m)} className="font-bold text-slate-800 hover:text-indigo-700 flex items-center gap-2">
                                       <span className="w-7 h-7 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center text-xs font-black">{(m.name || '유').substring(0, 1)}</span>
-                                      <span className="flex items-center gap-1.5">
+                                      <span className="flex flex-wrap items-center gap-1.5">
                                         {m.name || '-'}
                                         {m.isAdmin && <span className="text-[10px] bg-red-50 text-red-600 border border-red-100 font-bold px-1.5 py-0.5 rounded-md">관리자</span>}
+                                        {isInactiveParticipant && <span className="text-[10px] bg-slate-100 text-slate-500 border border-slate-200 font-bold px-1.5 py-0.5 rounded-md">워크스페이스 참여자 아님</span>}
                                       </span>
                                     </button>
                                   </td>
